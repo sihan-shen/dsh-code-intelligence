@@ -1,7 +1,12 @@
 node_modules/
 lib/
+dist/
 *.tsbuildinfo
 *.tgz
+*.log
+pnpm-debug.log*
 .vite/
 .vite-temp/
 coverage/
+.nyc_output/
+.DS_Store
