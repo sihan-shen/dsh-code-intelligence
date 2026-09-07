@@ -38,8 +38,8 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-subprocess": "0.1.1-rc.2",
-    "@ds-plugins/dsh-context": "git+https://github.com/sihan-shen/DS-Plugins.git#d5d1caa61bf8e38d8b9946176bf02b63545aca9c&path:/packages/dsh-context",
-    "@ds-plugins/dsh-context-cache": "git+https://github.com/sihan-shen/DS-Plugins.git#d5d1caa61bf8e38d8b9946176bf02b63545aca9c&path:/packages/dsh-context-cache",
+    "@ds-plugins/dsh-context": "git+https://github.com/sihan-shen/DS-Plugins.git#d4337884d2f160291d04f43cd64a34c6946d6d5c&path:/packages/dsh-context",
+    "@ds-plugins/dsh-context-cache": "git+https://github.com/sihan-shen/DS-Plugins.git#d4337884d2f160291d04f43cd64a34c6946d6d5c&path:/packages/dsh-context-cache",
     "picomatch": "4.0.7",
     "typescript": "5.9.3"
   },
