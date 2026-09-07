@@ -2,6 +2,11 @@
   "name": "@ds-plugins/dsh-code-intelligence",
   "version": "0.2.0",
   "description": "Repository snapshots, symbols, and context tools for DeepSeek Harness",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sihan-shen/dsh-code-intelligence.git"
+  },
+  "homepage": "https://github.com/sihan-shen/dsh-code-intelligence#readme",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": "^22.19.0 || >=24"
@@ -23,9 +28,11 @@
     "cordis.patch.yml",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsdown --out-dir lib --external typescript",
-    "prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
@@ -38,8 +45,8 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-subprocess": "0.1.1-rc.2",
-    "@ds-plugins/dsh-context": "git+https://github.com/sihan-shen/DS-Plugins.git#e4c98c4e278695d29fb1a09aa9dce23f10d064d2&path:/packages/dsh-context",
-    "@ds-plugins/dsh-context-cache": "git+https://github.com/sihan-shen/DS-Plugins.git#e4c98c4e278695d29fb1a09aa9dce23f10d064d2&path:/packages/dsh-context-cache",
+    "@ds-plugins/dsh-context": "^0.2.0",
+    "@ds-plugins/dsh-context-cache": "^0.2.0",
     "picomatch": "4.0.7",
     "typescript": "5.9.3"
   },
