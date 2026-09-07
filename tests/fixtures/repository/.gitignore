@@ -1,0 +1,3 @@
+# Fixture repository ignores one root file and one nested file.
+ignored.ts
+src/ignored.js
