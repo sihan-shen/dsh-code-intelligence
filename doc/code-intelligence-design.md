@@ -577,9 +577,11 @@ Cursor 沿用 §3.3 的 payload + digest 编码方式，绑定 kind、snapshotId
 
 #### 宿主失败桥接前置
 
+**当前批准的传输范围：** P0 / M1 的结构化失败按 Native 工具调用验收。现有宿主 `run_code`（PTC）会将子调用失败降为 message-only，本阶段不修改宿主，不承诺 PTC 下保留 code/details。宿主须为采用本合同的 Agent 配置 Native 工具呈现；本包不伪造单工具 Native 开关，不把结构化 JSON 塞进 message 绕过 PTC 限制。以后支持 PTC 需单独确认公开传输合同与端到端证据。
+
 当前宿主 `ToolFailure` 只有 message 与可选 `info: { name, code }`，仅为 HarnessError 保留 code；默认模型内容是 `Error: ${message}`，不会自动传递本包 details。因此 P0 必须通过宿主正式扩展点完成以下最小桥接；若当前版本无此扩展点，则先升级宿主合同，不在本包返回伪成功的错误对象，也不把 JSON 塞进 message 后要求调用方解析：
 
-- 本包业务失败保留宿主 `isError: true`、稳定 code 与有界 details；模型可见失败内容序列化为同一 `code/message/details` 数据，不只在内部日志保留 code。
+- 本包业务失败保留宿主 `isError: true`、稳定 code 与有界 details；模型可见失败内容序列化为同一 `code/message/details` 数据，不只在内部日志保留 code。Native 适配使用已有 `tools/execute` around hook 和 definition-owned `finalizeContent`：宿主路由字段为 `error.info.code` / `error.message`，完整已验证 DTO 放在受支持的 namespaced meta 中并呈现到 content，不向不支持的 `error.details` 属性强行扩展。只有本包实际拥有的工具和已识别业务失败可转换，取消、其他宿主错误与 policy replacement 保持原语义。
 - 共享 parser 验证本包业务失败 DTO；宿主桥接拥有 failure envelope / 呈现，本包适配器拥有业务码和 details。取消、timeout、关闭、过载和未知异常继续走宿主原通道。
 - 工具输入的宿主预校验不能悄悄丢失统一 invalid-query 语义；确认其结构化错误映射，避免只测试绕过 registry 的 execute 函数。
 - 在并行实现前，以真实工具注册 / 执行 / 模型呈现链路验证 invalid-query 与 stale-snapshot，后者必须保留 `details.currentSnapshotId`。只构造本包 Error 或只断言 message 不算完成。
