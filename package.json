@@ -4,7 +4,7 @@
   "description": "Repository snapshots, symbols, and context tools for DeepSeek Harness",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sihan-shen/dsh-code-intelligence.git"
+    "url": "git+https://github.com/sihan-shen/dsh-code-intelligence.git"
   },
   "homepage": "https://github.com/sihan-shen/dsh-code-intelligence#readme",
   "packageManager": "pnpm@11.7.0",
