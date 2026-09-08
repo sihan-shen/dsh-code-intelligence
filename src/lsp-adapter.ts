@@ -6,7 +6,7 @@ import { encodeLspClientMessage, LspFrameDecoder, parseLspResponse, type LspMess
 import type { AdapterUnavailableCode, AdapterUnavailableV1, HostNetworkIsolation, LspDeploymentConfigV1, SymbolAdapterResultV1 } from './types.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
 
-const VERSION = '0.2.0'
+const VERSION = '0.2.1'
 const JS_LANGUAGES = new Set(['javascript', 'typescript'])
 const KIND_NAMES: Record<number, string> = {
   5: 'class',
