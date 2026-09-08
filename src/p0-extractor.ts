@@ -28,15 +28,15 @@ type MutableState = {
   nextLocalId: number
 }
 
+type VariableBindingContext = {
+  readonly topLevelExport: boolean
+}
+
 type VisitFrame = {
   readonly node: ts.Node
   readonly parentLocalId: number | undefined
   readonly depth: number
-}
-
-type BindingFact = {
-  readonly name: string
-  readonly rangeNode: ts.VariableDeclaration | ts.BindingElement
+  readonly variableBindingContext?: VariableBindingContext
 }
 
 function extension(path: string): string {
@@ -107,24 +107,6 @@ function literalName(name: ts.PropertyName | ts.ModuleName | undefined): string 
     if (ts.isStringLiteral(expression) || ts.isNumericLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text
   }
   return undefined
-}
-
-function bindingFacts(declaration: ts.VariableDeclaration): BindingFact[] {
-  if (ts.isIdentifier(declaration.name)) return [{ name: declaration.name.text, rangeNode: declaration }]
-  const result: BindingFact[] = []
-  const stack: ts.BindingName[] = [declaration.name]
-  while (stack.length > 0) {
-    const name = stack.pop()!
-    if (ts.isIdentifier(name)) continue
-    for (let index = name.elements.length - 1; index >= 0; index--) {
-      const element = name.elements[index]
-      if (ts.isOmittedExpression(element)) continue
-      if (ts.isIdentifier(element.name)) result.push({ name: element.name.text, rangeNode: element })
-      else stack.push(element.name)
-    }
-  }
-  result.sort((first, second) => first.rangeNode.pos - second.rangeNode.pos || first.rangeNode.end - second.rangeNode.end || (first.name < second.name ? -1 : first.name > second.name ? 1 : 0))
-  return result
 }
 
 function declarationKind(node: ts.Node): SymbolKindP0 | undefined {
@@ -228,8 +210,6 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
     addRelation(type, { kind: 'file' }, target, type === 'calls' ? 'heuristic' : 'syntactic')
   }
 
-  const bindingContainers = new Map<ts.BindingElement, number>()
-
   const addSymbol = (rangeNode: ts.Node, name: string, kind: SymbolKindP0, parentLocalId: number | undefined): number | undefined => {
     if (!byteLengthWithin(name, EXTRACTION_POLICY_P0.maxNameBytes)) {
       markCapacity()
@@ -266,6 +246,22 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
   }
 
   const addTopLevelRelationship = (node: ts.Node): void => {
+    if (ts.isExportSpecifier(node)) {
+      const declaration = node.parent.parent
+      if (ts.isExportDeclaration(declaration) && declaration.parent === sourceFile) {
+        const specifier = declaration.moduleSpecifier && ts.isStringLiteralLike(declaration.moduleSpecifier) ? declaration.moduleSpecifier.text : undefined
+        addUnresolvedRelation('exports', node.name.text, specifier)
+      }
+      return
+    }
+    if (ts.isNamespaceExport(node)) {
+      const declaration = node.parent
+      if (ts.isExportDeclaration(declaration) && declaration.parent === sourceFile) {
+        const specifier = declaration.moduleSpecifier && ts.isStringLiteralLike(declaration.moduleSpecifier) ? declaration.moduleSpecifier.text : undefined
+        addUnresolvedRelation('exports', node.name.text, specifier)
+      }
+      return
+    }
     if (node.parent !== sourceFile) return
     if (ts.isImportDeclaration(node)) {
       if (ts.isStringLiteralLike(node.moduleSpecifier)) addUnresolvedRelation('imports', undefined, node.moduleSpecifier.text)
@@ -273,24 +269,11 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
     }
     if (ts.isExportDeclaration(node)) {
       const specifier = node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined
-      if (node.exportClause === undefined) {
-        if (specifier !== undefined) addUnresolvedRelation('exports', undefined, specifier)
-      } else if (ts.isNamedExports(node.exportClause)) {
-        for (const element of node.exportClause.elements) addUnresolvedRelation('exports', element.name.text, specifier)
-      } else if (ts.isNamespaceExport(node.exportClause)) {
-        addUnresolvedRelation('exports', node.exportClause.name.text, specifier)
-      }
+      if (node.exportClause === undefined && specifier !== undefined) addUnresolvedRelation('exports', undefined, specifier)
       return
     }
     if (ts.isExportAssignment(node)) {
       if (!node.isExportEquals) addUnresolvedRelation('exports', 'default', undefined)
-      return
-    }
-    if (ts.isVariableStatement(node)) {
-      if (!hasModifier(node, ts.SyntaxKind.ExportKeyword)) return
-      for (const declaration of node.declarationList.declarations) {
-        for (const binding of bindingFacts(declaration)) addUnresolvedRelation('exports', binding.name, undefined)
-      }
       return
     }
     const kind = declarationKind(node)
@@ -313,6 +296,15 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
     }
   }
 
+  const variableIsTopLevelExport = (declaration: ts.VariableDeclaration): boolean => {
+    const declarationList = declaration.parent
+    const statement = declarationList.parent
+    return ts.isVariableDeclarationList(declarationList)
+      && ts.isVariableStatement(statement)
+      && statement.parent === sourceFile
+      && hasModifier(statement, ts.SyntaxKind.ExportKeyword)
+  }
+
   let scheduledNodes = 1
   const stack: VisitFrame[] = [{ node: sourceFile, parentLocalId: undefined, depth: 0 }]
   while (stack.length > 0) {
@@ -323,20 +315,22 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
     addCallRelationship(node)
 
     let childParentLocalId = frame.parentLocalId
-    if (ts.isBindingElement(node)) childParentLocalId = bindingContainers.get(node) ?? frame.parentLocalId
     const kind = declarationKind(node)
     if (kind !== undefined) {
       const name = literalName((node as ts.NamedDeclaration).name as ts.PropertyName | ts.ModuleName | undefined)
       if (name !== undefined) childParentLocalId = addSymbol(node, name, kind, frame.parentLocalId) ?? frame.parentLocalId
     } else if (ts.isVariableDeclaration(node)) {
-      const bindings = bindingFacts(node)
-      let directBindingId: number | undefined
-      for (const binding of bindings) {
-        const localId = addSymbol(binding.rangeNode, binding.name, 'variable', frame.parentLocalId)
-        if (binding.rangeNode === node) directBindingId = localId
-        else if (localId !== undefined && ts.isBindingElement(binding.rangeNode)) bindingContainers.set(binding.rangeNode, localId)
+      if (ts.isIdentifier(node.name)) {
+        const localId = addSymbol(node, node.name.text, 'variable', frame.parentLocalId)
+        if (variableIsTopLevelExport(node)) addUnresolvedRelation('exports', node.name.text, undefined)
+        if (localId !== undefined) childParentLocalId = localId
       }
-      if (directBindingId !== undefined) childParentLocalId = directBindingId
+    } else if (ts.isBindingElement(node) && frame.variableBindingContext !== undefined) {
+      if (ts.isIdentifier(node.name)) {
+        const localId = addSymbol(node, node.name.text, 'variable', frame.parentLocalId)
+        if (frame.variableBindingContext.topLevelExport) addUnresolvedRelation('exports', node.name.text, undefined)
+        if (localId !== undefined) childParentLocalId = localId
+      }
     } else {
       const supportedMemberKind = memberKind(node)
       if (supportedMemberKind !== undefined) {
@@ -353,19 +347,31 @@ function extractFacts(file: VerifiedFileP0, limits: ExtractionLimitsP0, control:
       continue
     }
 
-    const children: ts.Node[] = []
+    const children: VisitFrame[] = []
     ts.forEachChild(node, child => {
+      checkpoint(control)
       if (scheduledNodes >= limits.maxNodes) {
         markCapacity()
         return child
       }
       scheduledNodes++
-      children.push(child)
+      let variableBindingContext: VariableBindingContext | undefined
+      if (ts.isVariableDeclaration(node) && child === node.name && !ts.isIdentifier(node.name)) {
+        variableBindingContext = { topLevelExport: variableIsTopLevelExport(node) }
+      } else if (ts.isBindingElement(node) && child === node.name && !ts.isIdentifier(node.name)) {
+        variableBindingContext = frame.variableBindingContext
+      } else if (ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) {
+        variableBindingContext = frame.variableBindingContext
+      }
+      children.push({
+        node: child,
+        parentLocalId: childParentLocalId,
+        depth: frame.depth + 1,
+        ...(variableBindingContext === undefined ? {} : { variableBindingContext }),
+      })
       return undefined
     })
-    for (let index = children.length - 1; index >= 0; index--) {
-      stack.push({ node: children[index], parentLocalId: childParentLocalId, depth: frame.depth + 1 })
-    }
+    for (let index = children.length - 1; index >= 0; index--) stack.push(children[index])
   }
 
   checkpoint(control)
@@ -412,6 +418,6 @@ export class TypeScriptAstExtractorP0 implements FileExtractorP0 {
   }
 }
 
-export function createTypeScriptAstExtractorP0(limits?: Partial<ExtractionLimitsP0>): FileExtractorP0 {
+export function createTypeScriptAstExtractorP0(limits?: Partial<ExtractionLimitsP0>): TypeScriptAstExtractorP0 {
   return new TypeScriptAstExtractorP0(limits)
 }

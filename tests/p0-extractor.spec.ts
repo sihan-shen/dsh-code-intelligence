@@ -72,6 +72,14 @@ describe('TypeScriptAstExtractorP0 declarations', () => {
     expect(relations(result, 'contains')).toHaveLength(result.symbols.filter(symbol => symbol.parentLocalId !== undefined).length)
   })
 
+  it('parents declarations in binding initializers to the visited binding element symbol', () => {
+    const source = 'const { a = (() => { const inner = 1 })() } = obj'
+    const result = createTypeScriptAstExtractorP0().extract(verified('main.ts', source)) as FileExtractionFactsP0
+
+    expect(result.status).toBe('complete')
+    expect(parentName(result, 'inner')).toBe('a')
+  })
+
   it('uses the nearest retained ancestor after an overlong container is omitted', () => {
     const tooLong = 'x'.repeat(4097)
     const source = `namespace Root { namespace ${tooLong} { class Kept {} } }`
@@ -208,6 +216,30 @@ describe('TypeScriptAstExtractorP0 status and bounds', () => {
     expect(nodeLimited.status).toBe('partial')
     expect(nodeLimited.symbols).toEqual([])
     expect(() => createTypeScriptAstExtractorP0({ maxSymbols: 0 })).toThrow(TypeError)
+  })
+
+  it('does not emit deep or wide destructured bindings and exports beyond traversal bounds', () => {
+    const deepSource = 'export const { kept, outer: { inner } } = value'
+    const deep = createTypeScriptAstExtractorP0({ maxDepth: 5 }).extract(verified('deep.ts', deepSource))
+    expect(deep.status).toBe('partial')
+    expect(deep.reasons).toContain('capacity-limit')
+    expect(deep.symbols.map(symbol => symbol.name)).toEqual(['kept'])
+    expect(relations(deep, 'exports').map(relation => relation.target)).toEqual([{ kind: 'unresolved', name: 'kept' }])
+
+    const names = Array.from({ length: 100 }, (_, index) => `item${index}`).join(', ')
+    const wide = createTypeScriptAstExtractorP0({ maxNodes: 5 }).extract(verified('wide.ts', `export const { ${names} } = value`))
+    expect(wide.status).toBe('partial')
+    expect(wide.reasons).toContain('capacity-limit')
+    expect(wide.symbols).toEqual([])
+    expect(relations(wide, 'exports')).toEqual([])
+  })
+
+  it('bounds named re-export processing by visited nodes', () => {
+    const names = Array.from({ length: 100 }, (_, index) => `item${index}`).join(', ')
+    const result = createTypeScriptAstExtractorP0({ maxNodes: 3 }).extract(verified('exports.ts', `export { ${names} } from "pkg"`))
+    expect(result.status).toBe('partial')
+    expect(result.reasons).toContain('capacity-limit')
+    expect(relations(result, 'exports')).toEqual([])
   })
 
   it('propagates cancellation and deadline failures', () => {
