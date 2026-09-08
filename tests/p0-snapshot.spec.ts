@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { sha256Utf8, SNAPSHOT_POLICY_P0 } from '@han_05/dsh-context'
 import { collectSnapshotP0, parseSnapshotConfigP0 } from '../src/p0-snapshot.ts'
+import { createVerifiedReaderP0 } from '../src/p0-reader.ts'
 import type { FileExtractorP0, SnapshotConfigP0 } from '../src/p0-types.ts'
 
 const roots: string[] = []
@@ -111,12 +112,86 @@ describe('P0 bounded snapshot collection', () => {
     await expect(collectSnapshotP0(config(root, { maxIgnorePatterns: 1 }), extractor)).rejects.toMatchObject({ reason: 'max-ignore-patterns-exceeded' })
     await expect(collectSnapshotP0(config(root, { maxIgnoreBytes: 4 }), extractor, {}, { readerHooks: { afterOpen: path => appendFile(path, 'x'.repeat(30)) } })).rejects.toMatchObject({ reason: 'changed-during-read' })
   })
-  it('binds an ignore receipt to the same bytes used for matching', async () => {
-    const root = await setup(); await writeFile(join(root, '.gitignore'), '#a\n')
+  it.each([
+    ['', 'edit'], ['', 'grow'], ['', 'delete'],
+    ['src', 'edit'], ['src', 'grow'], ['src', 'delete'],
+  ] as const)('reuses the first verified ignore text in %s after a later %s', async (directory, mutation) => {
+    const root = await setup()
+    const base = join(root, directory)
+    await mkdir(base, { recursive: true })
+    const ignorePath = directory ? `${directory}/.gitignore` : '.gitignore'
+    const aPath = directory ? `${directory}/a.ts` : 'a.ts'
+    const bPath = directory ? `${directory}/b.ts` : 'b.ts'
+    const original = 'b.ts\n# initial\n'
+    const updated = `a.ts\n${mutation === 'grow' ? '#'.repeat(40) : ''}`
+    await writeFile(join(base, '.gitignore'), original)
+    await writeFile(join(base, 'a.ts'), 'a')
+    await writeFile(join(base, 'b.ts'), 'b')
     let reads = 0
-    await expect(collectSnapshotP0(config(root), extractor, {}, { readerHooks: {
-      beforeOpen: async path => { if (++reads === 2) await appendFile(path, '#changed\n') },
-    } })).rejects.toMatchObject({ code: 'stale-source' })
+    let extracts = 0
+    const localExtractor: FileExtractorP0 = { ...extractor, extract(file, control) {
+      if (file.receipt.path === ignorePath) {
+        extracts++
+        expect(file.text).toBe(original)
+        expect(file.receipt.contentHash).toBe(sha256Utf8(original))
+      }
+      return extractor.extract(file, control)
+    } }
+    const settings = config(root, { maxFileBytes: 32 })
+    const first = await collectSnapshotP0(settings, localExtractor, {}, { readerHooks: {
+      afterClose: async path => {
+        if (path !== join(base, '.gitignore')) return
+        if (++reads !== 1) return
+        if (mutation === 'delete') await rm(path)
+        else await writeFile(path, updated)
+      },
+    } })
+    expect(reads).toBe(1)
+    expect(extracts).toBe(1)
+    expect(first.files.map(file => file.receipt.path)).toEqual([ignorePath, aPath])
+    expect(first.files[0].receipt).toMatchObject({ contentHash: sha256Utf8(original), byteLength: Buffer.byteLength(original) })
+    expect(first.files[0].facts.sourceHash).toBe(sha256Utf8(original))
+    expect(first.scanCoverage).toMatchObject({ candidateFiles: 2, receiptFiles: 2, receiptBytes: Buffer.byteLength(original) + 1,
+      skipped: { 'excluded-by-policy': 1, 'unsupported-format': 0, 'file-too-large': 0 },
+    })
+    // Retaining a sampled receipt never makes the current on-disk source that version.
+    const reader = await createVerifiedReaderP0(root)
+    await expect(reader({ path: ignorePath, maxBytes: 32, expectedHash: sha256Utf8(original) })).rejects.toMatchObject({ code: 'stale-source' })
+    const next = await collectSnapshotP0(settings, extractor)
+    expect(next.files.map(file => file.receipt.path)).toEqual(mutation === 'delete' ? [aPath, bPath] : mutation === 'grow' ? [bPath] : [ignorePath, bPath])
+    if (mutation === 'edit') expect(next.files[0].receipt.contentHash).toBe(sha256Utf8(updated))
+  })
+  it('charges reused ignore receipts once and still enforces candidate and total byte caps', async () => {
+    const root = await setup()
+    const original = '#a\n'
+    await writeFile(join(root, '.gitignore'), original)
+    await writeFile(join(root, 'a.ts'), 'x')
+    const result = await collectSnapshotP0(config(root, { maxFiles: 2, maxTotalBytes: 4, maxIgnoreBytes: 3 }), extractor)
+    expect(result.scanCoverage).toMatchObject({ candidateFiles: 2, receiptFiles: 2, receiptBytes: 4 })
+    await expect(collectSnapshotP0(config(root, { maxFiles: 1 }), extractor)).rejects.toMatchObject({ reason: 'max-files-exceeded' })
+    await expect(collectSnapshotP0(config(root, { maxTotalBytes: 2 }), extractor)).rejects.toMatchObject({ reason: 'max-total-bytes-exceeded' })
+  })
+  it('keeps receipt exclusion and size policies for the sampled ignore bytes', async () => {
+    const root = await setup()
+    const ignore = join(root, '.gitignore')
+    await writeFile(ignore, 'a.ts\n' + '#'.repeat(40))
+    await writeFile(join(root, 'a.ts'), 'a')
+    await writeFile(join(root, 'b.ts'), 'b')
+    let reads = 0
+    const large = await collectSnapshotP0(config(root, { maxFileBytes: 32 }), extractor, {}, { readerHooks: {
+      afterClose: async path => { if (path === ignore) { reads++; await writeFile(path, '#small\n') } },
+    } })
+    expect(reads).toBe(1)
+    expect(large.files.map(file => file.receipt.path)).toEqual(['b.ts'])
+    expect(large.scanCoverage).toMatchObject({ candidateFiles: 1, receiptFiles: 1, receiptBytes: 1,
+      skipped: { 'excluded-by-policy': 1, 'unsupported-format': 0, 'file-too-large': 1 },
+    })
+    await writeFile(ignore, '.gitignore\na.ts\n')
+    const excluded = await collectSnapshotP0(config(root), extractor)
+    expect(excluded.files.map(file => file.receipt.path)).toEqual(['b.ts'])
+    expect(excluded.scanCoverage).toMatchObject({ candidateFiles: 1, receiptFiles: 1, receiptBytes: 1,
+      skipped: { 'excluded-by-policy': 2, 'unsupported-format': 0, 'file-too-large': 0 },
+    })
   })
   it('prunes explicit and detected nested checkouts without enumerating their contents', async () => {
     const root = await setup()
@@ -127,6 +202,15 @@ describe('P0 bounded snapshot collection', () => {
     const result = await collectSnapshotP0(config(root, { nestedCheckoutRoots: ['explicit'] }), extractor)
     expect(result.files).toEqual([])
     expect(result.scanCoverage).toMatchObject({ openedDirectories: 1, observedEntries: 2, skipped: { 'excluded-by-policy': 2 } })
+  })
+  it.each(['ENOENT', 'EACCES'])('preserves enumeration cancellation carrying %s', async code => {
+    const root = await setup(); await writeFile(join(root, 'a.ts'), 'x')
+    const controller = new AbortController()
+    const reason = Object.assign(new Error('caller cancellation'), { code })
+    await expect(collectSnapshotP0(config(root), extractor, { signal: controller.signal }, {
+      onEntry: () => controller.abort(reason),
+    })).rejects.toBe(reason)
+    expect((await collectSnapshotP0(config(root), extractor)).files).toHaveLength(1)
   })
   it('rejects nonregular ignore inputs and cancels during enumeration with handles closed', async () => {
     const root = await setup(); await mkdir(join(root, '.gitignore'))

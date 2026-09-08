@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sha256Utf8 } from '@han_05/dsh-context'
+import { canonicalJson, sha256Utf8 } from '@han_05/dsh-context'
 import { RepositorySnapshotStore } from '../src/snapshot.ts'
 import { parseSnapshotConfig } from '../src/config.ts'
 import { buildSymbolIndex, InternalSymbolIndexStore } from '../src/symbol-index.ts'
@@ -98,6 +98,11 @@ describe('deterministic TypeScript/JavaScript fallback symbols', () => {
     const first = await extractFallbackSymbols(store)
     const second = await extractFallbackSymbols(store)
     expect(first.entries).toEqual(second.entries)
+    // P0's parent-ID migration must not alter the default V1 identity formula.
+    for (const entry of first.entries) {
+      expect(entry.symbolId).toBe(sha256Utf8(canonicalJson([store.snapshot.snapshotId,
+        entry.path, entry.kind, entry.name, entry.start, entry.end, entry.container ?? null])))
+    }
     expect(first.entries.map(entry => `${entry.path}:${entry.start.line}:${entry.start.column}:${entry.kind}:${entry.name}:${entry.symbolId}`)).toEqual([...first.entries].sort((a, b) => a.path.localeCompare(b.path) || a.start.line - b.start.line || a.start.column - b.start.column || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name) || a.symbolId.localeCompare(b.symbolId)).map(entry => `${entry.path}:${entry.start.line}:${entry.start.column}:${entry.kind}:${entry.name}:${entry.symbolId}`))
     const recovered = first.entries.find(entry => entry.name === 'recovered')
     expect(recovered).toBeDefined()

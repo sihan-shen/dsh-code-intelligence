@@ -119,7 +119,12 @@ export async function createVerifiedReaderP0(deploymentRoot: string, hooks?: Ver
       } finally {
         await handle.close()
         await hooks?.afterClose?.(absolutePath, handle)
+        checkBuildControlP0(request)
       }
-    } catch (error) { return ioFailure(error) }
+    } catch (error) {
+      // Abort reasons are caller-owned and may themselves carry errno-like codes.
+      checkBuildControlP0(request)
+      return ioFailure(error)
+    }
   }
 }

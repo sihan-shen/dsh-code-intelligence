@@ -1,5 +1,5 @@
 import {
-  canonicalJson, sha256Utf8, EXTRACTION_POLICY_P0, SNAPSHOT_POLICY_P0,
+  canonicalJson, sha256Utf8, EXTRACTION_POLICY_P0, INDEX_POLICY_P0, SNAPSHOT_POLICY_P0,
   parseFileExtractionStateP0, parseProviderIdentityP0, parseProvenanceP0, parseRelationshipP0,
   parseRepositorySnapshotP0, parseScanCoverageP0, parseSymbolP0,
   type ExtractionReasonP0, type FileExtractionStateP0, type ProviderIdentityP0,
@@ -123,7 +123,6 @@ function finalizeFile(file: CollectedFileP0, snapshotId: string, provenanceId: s
     return id
   }
   const finalized = new Map<number, SymbolP0>()
-  const qualified = new Map<number, string>()
   const depths = new Map<number, number>()
   for (const id of retained) {
     checkBuildControlP0(control)
@@ -132,23 +131,30 @@ function finalizeFile(file: CollectedFileP0, snapshotId: string, provenanceId: s
     while (current !== undefined && !finalized.has(current)) { chain.push(current); current = parentOf(locals.get(current)!) }
     if (chain.length > EXTRACTION_POLICY_P0.maxDepth) fail()
     for (const child of chain.reverse()) {
+      checkBuildControlP0(control)
       const local = locals.get(child)!
       const parent = parentOf(local)
       const depth = parent === undefined ? 1 : depths.get(parent)! + 1
       if (depth > EXTRACTION_POLICY_P0.maxDepth) fail()
       depths.set(child, depth)
-      const container = parent === undefined ? undefined : qualified.get(parent)!
-      const label = container === undefined ? local.name : `${container}.${local.name}`
-      qualified.set(child, label)
+      const parentSymbol = parent === undefined ? undefined : finalized.get(parent)!
+      const containerId = parentSymbol?.symbolId
+      const container = parentSymbol?.lexicalQualifiedName
+      // Never materialize or retain an overlong ancestor label. An omitted
+      // parent's label stays omitted for all descendants, not a new root label.
+      let label: string | undefined
+      if (parent === undefined) label = local.name
+      else if (container !== undefined && Buffer.byteLength(container) + 1 + Buffer.byteLength(local.name) <= EXTRACTION_POLICY_P0.maxQualifiedNameBytes) label = `${container}.${local.name}`
       const start = positionAtOffsetP0(lineMap, local.startOffset)
       const end = positionAtOffsetP0(lineMap, local.endOffset)
       finalized.set(child, checked(parseSymbolP0, {
-        // V1 formula: container is the full lexical ancestor label, NOT a name lookup or ID.
-        symbolId: hash([snapshotId, receipt.path, local.kind, local.name, start, end, container ?? null]),
+        // P0-only v2: parent identity is fixed-size; query labels are not identity.
+        symbolId: hash([INDEX_POLICY_P0.symbolIdVersion, snapshotId, receipt.path, local.kind, local.name,
+          local.startOffset, local.endOffset, containerId ?? null]),
         path: receipt.path, sourceHash: receipt.contentHash, name: local.name, kind: local.kind,
         ...(local.providerKind === undefined ? {} : { providerKind: local.providerKind }),
-        ...(Buffer.byteLength(label) <= EXTRACTION_POLICY_P0.maxQualifiedNameBytes ? { lexicalQualifiedName: label } : {}),
-        ...(parent === undefined ? {} : { containerId: finalized.get(parent)!.symbolId }),
+        ...(label === undefined ? {} : { lexicalQualifiedName: label }),
+        ...(containerId === undefined ? {} : { containerId }),
         startOffset: local.startOffset, endOffset: local.endOffset, start, end, provenanceId,
       }))
     }
@@ -262,7 +268,7 @@ export function finalizeIndexP0(collected: CollectedSnapshotP0, identity: Provid
   fileExtractionStates.sort((a, b) => compare(a.path, b.path) || compare(a.sourceHash, b.sourceHash))
   checkBuildControlP0(control)
   const indexFingerprint = hash({
-    schema: 'dsh-index-fingerprint-v1', providerConfigIdentity,
+    schema: 'dsh-index-fingerprint-v2', indexPolicy: INDEX_POLICY_P0, providerConfigIdentity,
     normalizedFacts: { snapshot, symbols, relationships: uniqueRelations, scanCoverage }, fileExtractionStates,
   })
   const result = freeze({ snapshot, indexFingerprint, providerConfigIdentity, symbols, relationships: uniqueRelations, fileExtractionStates, scanCoverage })

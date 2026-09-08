@@ -80,6 +80,25 @@ describe('P0 verified reader', () => {
     await expect(closed!.stat()).rejects.toMatchObject({ code: 'EBADF' })
     await expect(reader({ path: 'a.ts', maxBytes: 20, deadlineMs: 0 })).rejects.toMatchObject({ name: 'TimeoutError' })
   })
+  it.each(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'ELOOP'])('preserves cancellation reasons carrying %s instead of mapping them as I/O', async code => {
+    const { root } = await setup()
+    const controller = new AbortController()
+    const reason = Object.assign(new Error('caller cancellation'), { code })
+    let closed: FileHandle | undefined
+    const reader = await createVerifiedReaderP0(root, {
+      afterOpen: () => controller.abort(reason),
+      afterClose: (_path, handle) => { closed = handle },
+    })
+    await expect(reader({ path: 'a.ts', maxBytes: 20, signal: controller.signal })).rejects.toBe(reason)
+    await expect(closed!.stat()).rejects.toMatchObject({ code: 'EBADF' })
+  })
+  it('does not return verified text after cancellation during descriptor cleanup', async () => {
+    const { root } = await setup()
+    const controller = new AbortController()
+    const reason = new Error('cancelled during close')
+    const reader = await createVerifiedReaderP0(root, { afterClose: () => controller.abort(reason) })
+    await expect(reader({ path: 'a.ts', maxBytes: 20, signal: controller.signal })).rejects.toBe(reason)
+  })
   it('rejects traversal, hard exclusions, nonregular files and symlink containment escape', async () => {
     const { root } = await setup()
     const outside = await setup()

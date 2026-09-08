@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import picomatch from 'picomatch'
 import { isIndexableFile, normalizeRepoPath, sha256Utf8, SNAPSHOT_POLICY_P0, type ScanCoverageP0 } from '@han_05/dsh-context'
 import { checkBuildControlP0, containedP0, createVerifiedReaderP0, excludedPathP0, P0ReadError, type VerifiedReaderHooksP0 } from './p0-reader.js'
-import type { BuildControlP0, CollectedFileP0, CollectedSnapshotP0, FileExtractorP0, SnapshotConfigP0, VerifiedReaderP0 } from './p0-types.js'
+import type { BuildControlP0, CollectedFileP0, CollectedSnapshotP0, FileExtractorP0, SnapshotConfigP0, VerifiedFileP0, VerifiedReaderP0 } from './p0-types.js'
 
 const LIMIT_KEYS = ['maxFileBytes', 'maxFiles', 'maxTotalBytes', 'maxDirectories', 'maxScanEntries', 'maxIgnoreBytes', 'maxIgnorePatterns'] as const
 
@@ -71,6 +71,16 @@ export async function collectSnapshotP0(config: SnapshotConfigP0, extractor: Fil
   let ignoreBytes = 0
   let patterns = 0
   const files: CollectedFileP0[] = []
+  const collectFile = async (file: VerifiedFileP0): Promise<void> => {
+    if (coverage.receiptBytes + file.receipt.byteLength > parsed.maxTotalBytes) throw new P0ReadError('refresh-failed', 'max-total-bytes-exceeded')
+    coverage.receiptBytes += file.receipt.byteLength
+    coverage.receiptFiles++
+    checkBuildControlP0(control)
+    // Extractor owns local failure isolation; F5 owns validation, not this scanner.
+    const facts = await extractor.extract(file, control)
+    checkBuildControlP0(control)
+    files.push(Object.freeze({ receipt: file.receipt, lineMap: file.lineMap, facts }))
+  }
   const scan = async (directory: string, inherited: readonly IgnoreRule[]): Promise<void> => {
     checkBuildControlP0(control)
     if (coverage.openedDirectories >= parsed.maxDirectories) throw new P0ReadError('refresh-failed', 'max-directories-exceeded')
@@ -99,7 +109,6 @@ export async function collectSnapshotP0(config: SnapshotConfigP0, extractor: Fil
     if (!after.isDirectory() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || canonical !== await realpath(absolute)) throw new P0ReadError('stale-source', 'changed-during-read')
     entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     const rules = [...inherited]
-    let ignoreHash: string | undefined
     if (entries.some(entry => entry.name === '.gitignore')) {
       const path = directory === '' ? '.gitignore' : `${directory}/.gitignore`
       const initial = await lstat(join(absolute, '.gitignore'))
@@ -112,7 +121,6 @@ export async function collectSnapshotP0(config: SnapshotConfigP0, extractor: Fil
         throw error
       }
       ignoreBytes += file.receipt.byteLength
-      ignoreHash = file.receipt.contentHash
       // split is bounded by the already bounded cumulative ignore bytes.
       for (const line of file.text.split(/\r?\n/)) {
         checkBuildControlP0(control)
@@ -125,9 +133,19 @@ export async function collectSnapshotP0(config: SnapshotConfigP0, extractor: Fil
         const options = { dot: true, nonegate: true }
         rules.push({ base: directory, match: picomatch(normalized, options) })
       }
+      // Rules and any receipt/facts use this same sampled version. Later edits
+      // belong to a subsequent collection, not a second read or stat here.
+      // Finish extraction now so ignore text is released before scanning children.
+      if (excludedPathP0(path, parsed.nestedCheckoutRoots) || ignored(path, rules)) coverage.skipped['excluded-by-policy']++
+      else if (file.receipt.byteLength > parsed.maxFileBytes) coverage.skipped['file-too-large']++
+      else {
+        if (++coverage.candidateFiles > parsed.maxFiles) throw new P0ReadError('refresh-failed', 'max-files-exceeded')
+        await collectFile(file)
+      }
     }
     for (const entry of entries) {
       checkBuildControlP0(control)
+      if (entry.name === '.gitignore') continue // Already sampled and accounted for above.
       const path = directory === '' ? entry.name : `${directory}/${entry.name}`
       if (excludedPathP0(path, parsed.nestedCheckoutRoots) || ignored(path, rules)) { coverage.skipped['excluded-by-policy']++; continue }
       normalizeRepoPath(root, path)
@@ -148,22 +166,16 @@ export async function collectSnapshotP0(config: SnapshotConfigP0, extractor: Fil
       if (initial.size > parsed.maxFileBytes) { coverage.skipped['file-too-large']++; continue }
       if (++coverage.candidateFiles > parsed.maxFiles) throw new P0ReadError('refresh-failed', 'max-files-exceeded')
       let file
-      try { file = await reader({ ...control, path, maxBytes: parsed.maxFileBytes, ...(entry.name === '.gitignore' && ignoreHash !== undefined ? { expectedHash: ignoreHash } : {}) }) } catch (error) {
+      try { file = await reader({ ...control, path, maxBytes: parsed.maxFileBytes }) } catch (error) {
         if (error instanceof P0ReadError && error.reason === 'unsupported-format') { coverage.skipped['unsupported-format']++; continue }
         if (error instanceof P0ReadError && error.reason === 'file-too-large') throw new P0ReadError('stale-source', 'changed-during-read')
         throw error
       }
-      if (coverage.receiptBytes + file.receipt.byteLength > parsed.maxTotalBytes) throw new P0ReadError('refresh-failed', 'max-total-bytes-exceeded')
-      coverage.receiptBytes += file.receipt.byteLength
-      coverage.receiptFiles++
-      checkBuildControlP0(control)
-      // Extractor owns local failure isolation; F5 owns validation, not this scanner.
-      const facts = await extractor.extract(file, control)
-      checkBuildControlP0(control)
-      files.push(Object.freeze({ receipt: file.receipt, lineMap: file.lineMap, facts }))
+      await collectFile(file)
     }
   }
   try { await scan('', []) } catch (error) {
+    checkBuildControlP0(control)
     const code = (error as NodeJS.ErrnoException)?.code
     if (code === 'ENOENT' || code === 'ENOTDIR') throw new P0ReadError('stale-source', 'current-file-missing')
     if (code === 'EACCES' || code === 'EPERM' || code === 'ELOOP') throw new P0ReadError('access-denied', 'excluded-by-policy')

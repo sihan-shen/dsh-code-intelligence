@@ -185,7 +185,7 @@ symbolId = sha256(canonicalJson([
 ]))
 ```
 
-该 ID 是 snapshot-local 句柄，不承诺跨编辑稳定。P0 可沿用；若新增提取规则导致同一 snapshot 内碰撞，再以确定性 AST ordinal 消歧并升级相关合同，不为未来 rebase 预先替换它。
+该 V1 ID 是 snapshot-local 句柄，不承诺跨编辑稳定。V1 公式保留不变；P0 为消除完整祖先名称的内存与计算放大，采用 §4.1 的父 ID 公式，不为未来 rebase 提供稳定性承诺。
 
 当前内部关系：
 
@@ -254,6 +254,19 @@ V1 source 输入：`blockId/path/sourceHash/startOffset/endOffset`，offset 为 
 - exact query 支持同名多结果，不把“名字相同”解释为同一实体。
 - 函数重载可保留多个声明及各自位置；折叠展示不是身份正确性的前提。
 - 即使 hash 外形相同，也只按所属 snapshot 与索引成员验证句柄，不从 hash 推断语义。
+
+P0 身份规则由共享 `dsh-context` 的 `INDEX_POLICY_P0` 与本包 `src/p0-build.ts` / `tests/p0-build.spec.ts` 持有。当前 v2 公式为：
+
+```text
+symbolId = sha256(canonicalJson([
+  INDEX_POLICY_P0.symbolIdVersion, // 'dsh-symbol-p0-v2'
+  snapshotId, path, kind, name, startOffset, endOffset, containerId ?? null
+]))
+```
+
+父节点先终结；`containerId` 来自最近的已收录祖先，不通过名称查找，也不依赖临时 localId。qualified label 只用于查询，超长时不生成或内部保留完整拼接字符串，不影响有效 symbol / contains，也不单独标 partial。父标签超限时其后代标签继续省略，不能重新从子名称开始冒充完整标签。父身份或最终已收录祖先变化允许传播到后代 ID；重复最终身份仍整体失败，不以随机值消歧。
+
+本规则替换未发布的 P0 旧 ID，但不修改 V1。相同 receipts 可保持 snapshotId，indexFingerprint 显式绑定索引 policy 并换代，包括没有符号的空索引；旧 P0 句柄须按捕获索引的成员关系拒绝，旧索引 block / cursor 按 indexFingerprint 隔离。这些查询 / 缓存行为仍须在 M2 / M4 集成时实现，不能仅凭 schema 能解析 hash 就认定句柄有效。
 
 未来若引入 `symbolKey`，首先将其定义为 best-effort locator。名称、ordinal 或“偏移不超过 64 行”均不能证明跨编辑身份；不可作为安全自动认领条件。
 
@@ -642,12 +655,15 @@ workspace + snapshotId + indexFingerprint + normalized query + cursor/page
 
 ```text
 sha256(canonicalJson({
-  schema: 'dsh-index-fingerprint-v1',
+  schema: 'dsh-index-fingerprint-v2',
+  indexPolicy: INDEX_POLICY_P0,
   providerConfigIdentity,
   normalizedFacts,
   fileExtractionStates
 }))
 ```
+
+`INDEX_POLICY_P0` 当前为 `{ policyVersion: 'dsh-index-p0-v2', symbolIdVersion: 'dsh-symbol-p0-v2' }`，区分 finalizer 身份算法与未改变的 AST 覆盖 / snapshot receipt policy；自定义 provider 与空索引也纳入该边界。
 
 事实使用索引实际用于查询 / 投影的确定性字段，不含查询态 score；按固定键稳定排序，状态按 path/hash 排序，原因集合去重排序。包含模型可见的完整性、Provider Universe 成员 / 能力边界与诊断数量；不包含时间戳、耗时、原始异常文本等非确定性运行信息。文件数或 policy 版本号不能替代事实校验和。具体 canonical DTO 由实现与 fixture 测试共同维护，测试覆盖输入遍历顺序不影响 fingerprint，以及相同 receipts 下提取状态变化会改变 fingerprint。它是缓存 / cursor 边界及只读响应来源字段，不新增 Agent 需要提交或管理的查询句柄。
 
@@ -716,6 +732,8 @@ P0 在现有 output policy 之外补齐扫描 / 读取过程的资源限制，�
 **文件系统威胁模型：** P0 支持普通并发编辑，拒绝检测到的 symlink escape、非 regular 文件或路径替换；不承诺抵抗拥有同一 workspace 写权限的恶意进程持续替换祖先目录 / 文件。前后 realpath/lstat/fstat 不能构成这种对手下的原子 containment 证明。需要该保证的部署必须由宿主提供受隔离的可信读取边界或平台支持的 root-relative 安全打开能力；本包不能仅凭校验标记宣称已隔离。不具备该宿主边界时，不支持该威胁模型下的部署。普通竞争下无法验证的读取按 §5.5 失败，不返回部分内容。
 
 #### P0 ignore policy
+
+每个 `.gitignore` 在一次构建中只做一次可信读取；匹配规则与其被收录时的 receipt / 文件事实复用该次文本，不为生成 receipt 再读取或检查当前文件。可信读取完成后的修改、增长或删除留给下次构建采集；读取过程中检测到的竞争仍使本次构建失败。ignore 字节 / pattern 限额独立生效；是否收录 receipt 仍按排除策略及采集到的字节数执行 `maxFileBytes`，收录后计入候选数与总 receipt 字节，不能因复用绕过上限。此规则不提供发布时最新或跨文件原子一致性保证，后续 source read 仍核对当前内容 hash。
 
 P0 继续使用有限 picomatch 模式集合，不实现完整 gitignore。忽略空行 / 注释后，拒绝以 `!` 开头的 pattern（包括 extglob 否定写法），匹配器显式禁用顶层 negate 解释；不把不支持的重新纳入语法变成“排除其余所有文件”，也不静默跳过该规则。遇到不支持规则使构建失败，refresh-failed details 使用 `unsupported-ignore-pattern` 与允许展示的相对 ignore 文件位置，提示修改规则，不回显任意 pattern。此限制属于已公开的兼容性取舍，不是访问授权结论。
 

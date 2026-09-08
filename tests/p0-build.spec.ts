@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import * as ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  canonicalJson, sha256Utf8, SNAPSHOT_POLICY_P0, parseCodeIntelligenceFailureP0,
+  canonicalJson, sha256Utf8, SNAPSHOT_POLICY_P0, EXTRACTION_POLICY_P0, parseCodeIntelligenceFailureP0,
   parseSymbolP0, parseRelationshipP0, parseSymbolQueryRequestP0, parseRelationQueryRequestP0,
   type ProviderIdentityP0,
 } from '@han_05/dsh-context'
@@ -60,7 +60,7 @@ const fixtureExtractor: FileExtractorP0 = {
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 
 describe('P0 immutable two-phase finalizer', () => {
-  it('binds receipts, canonical coordinates, V1 IDs and provenance; publishes only deeply frozen DTOs', () => {
+  it('binds receipts, canonical coordinates, parent-based P0 IDs and provenance; publishes only deeply frozen DTOs', () => {
     const input = collection()
     const result = finalizeIndexP0(input, identity)
     expect(result.snapshot.snapshotId).toBe(digest({ schemaVersion: 'p0', workspaceFingerprint: input.workspaceFingerprint, revision: input.revision, files: result.snapshot.files, policyVersion: SNAPSHOT_POLICY_P0.policyVersion }))
@@ -68,7 +68,14 @@ describe('P0 immutable two-phase finalizer', () => {
     const child = result.symbols.find(s => s.name === 'value')!
     expect(child.lexicalQualifiedName).toBe('A.method.value')
     expect(child.containerId).toBe(parent.symbolId)
-    expect(child.symbolId).toBe(digest([result.snapshot.snapshotId, child.path, child.kind, child.name, child.start, child.end, 'A.method']))
+    for (const symbol of result.symbols) {
+      expect(symbol.symbolId).toBe(digest(['dsh-symbol-p0-v2', result.snapshot.snapshotId, symbol.path,
+        symbol.kind, symbol.name, symbol.startOffset, symbol.endOffset, symbol.containerId ?? null]))
+    }
+    const oldIds = result.symbols.map(symbol => digest([result.snapshot.snapshotId, symbol.path,
+      symbol.kind, symbol.name, symbol.start, symbol.end,
+      symbol.name === 'A' ? null : symbol.name === 'method' ? 'A' : 'A.method']))
+    expect(result.symbols.every(symbol => !oldIds.includes(symbol.symbolId))).toBe(true)
     expect(child.provenanceId).toBe(indexProvenanceP0(result.snapshot.snapshotId, identity).provenanceId)
     expect(result.relationships).toContainEqual({ snapshotId: result.snapshot.snapshotId, provenanceId: child.provenanceId, type: 'contains', source: { kind: 'symbol', symbolId: parent.symbolId }, target: { kind: 'symbol', symbolId: child.symbolId }, resolution: 'syntactic' })
     for (const symbol of result.symbols) { expect(parseSymbolP0(symbol)).toEqual(symbol); expect(symbol).not.toHaveProperty('score') }
@@ -125,6 +132,19 @@ describe('P0 immutable two-phase finalizer', () => {
     expect(finalizeIndexP0({ ...input, scanCoverage: { ...input.scanCoverage, observedEntries: 2 } }, identity).indexFingerprint).not.toBe(build().indexFingerprint)
   })
 
+  it('versions even empty indexes independently of receipt and provider identity', () => {
+    const result = build([])
+    const oldFingerprint = digest({ schema: 'dsh-index-fingerprint-v1', providerConfigIdentity: identity,
+      normalizedFacts: { snapshot: result.snapshot, symbols: [], relationships: [], scanCoverage: result.scanCoverage }, fileExtractionStates: [],
+    })
+    expect(result.indexFingerprint).not.toBe(oldFingerprint)
+    expect(result.indexFingerprint).toBe(digest({ schema: 'dsh-index-fingerprint-v2',
+      indexPolicy: { policyVersion: 'dsh-index-p0-v2', symbolIdVersion: 'dsh-symbol-p0-v2' }, providerConfigIdentity: identity,
+      normalizedFacts: { snapshot: result.snapshot, symbols: [], relationships: [], scanCoverage: result.scanCoverage }, fileExtractionStates: [],
+    }))
+    expect(result.providerConfigIdentity).toEqual(identity) // AST coverage did not change.
+  })
+
   it('isolates invalid positions/surrogate endpoints and dangling relation endpoints without losing receipts', () => {
     const original = file()
     const input = file('a.ts', { symbols: [...original.facts.symbols, local(40, 'bad', text.indexOf('😀') + 1, text.length)],
@@ -156,6 +176,59 @@ describe('P0 immutable two-phase finalizer', () => {
     expect(result.symbols[1].name).toBe('child')
     expect(result.symbols[1]).not.toHaveProperty('lexicalQualifiedName')
     expect(result.fileExtractionStates[0]).toMatchObject({ status: 'partial', reasons: ['capacity-limit'] })
+  })
+
+  it.each(['a'.repeat(4094), '界'.repeat(1364) + 'ab'])('bounds qualified labels by UTF-8 bytes without restarting an omitted ancestor chain', name => {
+    const input = file('a.ts', {
+      symbols: [local(1, name, 0, 39), local(2, '', 1, 38, 1), local(3, '', 2, 37, 2), local(4, '', 3, 36, 3), local(5, 'leaf', 4, 35, 4)],
+      relationships: [2, 3, 4, 5].map(id => ({ type: 'contains', source: { kind: 'symbol', localId: id - 1 }, target: { kind: 'symbol', localId: id }, resolution: 'syntactic' })),
+    })
+    const result = build([input])
+    expect(result.fileExtractionStates[0].status).toBe('complete')
+    expect(result.symbols.slice(0, 3).map(symbol => symbol.lexicalQualifiedName)).toEqual([name, `${name}.`, `${name}..`])
+    expect(result.symbols.slice(3).every(symbol => symbol.lexicalQualifiedName === undefined)).toBe(true)
+    expect(result.symbols.every(symbol => symbol.lexicalQualifiedName === undefined || Buffer.byteLength(symbol.lexicalQualifiedName) <= 4096)).toBe(true)
+    for (const symbol of result.symbols) expect(symbol.symbolId).toBe(digest(['dsh-symbol-p0-v2', result.snapshot.snapshotId,
+      symbol.path, symbol.kind, symbol.name, symbol.startOffset, symbol.endOffset, symbol.containerId ?? null]))
+  })
+
+  it('binds descendants to the actual parent identity, not an ambiguous lexical label', () => {
+    const input = file('a.ts', {
+      symbols: [local(1, 'A', 0, 39), local(2, 'B', 1, 38, 1), local(3, 'A.B', 0, 39), local(4, 'x', 3, 4, 2), local(5, 'x', 3, 4, 3)],
+      relationships: [[1, 2], [2, 4], [3, 5]].map(([parent, child]) => ({ type: 'contains', source: { kind: 'symbol', localId: parent }, target: { kind: 'symbol', localId: child }, resolution: 'syntactic' })),
+    })
+    const result = build([input])
+    const children = result.symbols.filter(symbol => symbol.name === 'x')
+    expect(children.map(symbol => symbol.lexicalQualifiedName)).toEqual(['A.B.x', 'A.B.x'])
+    expect(new Set(children.map(symbol => symbol.symbolId)).size).toBe(2)
+    expect(new Set(children.map(symbol => symbol.containerId)).size).toBe(2)
+  })
+
+  it('propagates parent identity changes without changing receipts or lexical query labels', () => {
+    const input = file()
+    const before = build([input])
+    const changed = build([{ ...input, facts: { ...input.facts,
+      symbols: input.facts.symbols.map(symbol => symbol.localId === 10 ? { ...symbol, kind: 'class' as const } : symbol),
+    } }])
+    expect(changed.snapshot).toEqual(before.snapshot)
+    expect(changed.symbols.map(symbol => symbol.lexicalQualifiedName)).toEqual(before.symbols.map(symbol => symbol.lexicalQualifiedName))
+    expect(changed.symbols.every(symbol => !before.symbols.some(old => old.symbolId === symbol.symbolId))).toBe(true)
+    expect(changed.fileExtractionStates).toEqual(before.fileExtractionStates)
+    expect(changed.indexFingerprint).not.toBe(before.indexFingerprint)
+  })
+
+  it('keeps maximum-depth long-name facts complete without storing expanded ancestry', () => {
+    const count = EXTRACTION_POLICY_P0.maxDepth
+    const input = file('a.ts', {
+      symbols: Array.from({ length: count }, (_, i) => local(i, 'n'.repeat(4096), 0, 39, i ? i - 1 : undefined)),
+      relationships: Array.from({ length: count - 1 }, (_, i) => ({ type: 'contains', source: { kind: 'symbol', localId: i }, target: { kind: 'symbol', localId: i + 1 }, resolution: 'syntactic' })),
+    })
+    const result = build([input])
+    expect(result.fileExtractionStates[0].status).toBe('complete')
+    expect(result.symbols).toHaveLength(count)
+    expect(result.relationships).toHaveLength(count - 1)
+    expect(result.symbols.filter(symbol => symbol.lexicalQualifiedName !== undefined)).toHaveLength(1)
+    expect(new Set(result.symbols.map(symbol => symbol.symbolId)).size).toBe(count)
   })
 
   it('rejects identity collisions, malformed top-level output and global parent/contains inconsistencies', () => {
@@ -205,6 +278,29 @@ describe('P0 immutable two-phase finalizer', () => {
     expect(result.fileExtractionStates.filter(s => s.eligible).every(s => s.status === 'complete')).toBe(true)
     expect(result.fileExtractionStates.find(s => s.path === '.gitignore')).toMatchObject({ eligible: false, status: 'unsupported' })
     expect(await buildIndexP0(config)).toEqual(result)
+  })
+
+  it('finalizes the sampled ignore version unchanged and applies edits only on the next build', async () => {
+    const initial = await workspace()
+    const config = parseSnapshotConfigP0({ ...initial, maxFileBytes: 60 })
+    const ignore = join(config.deploymentRoot, '.gitignore')
+    await writeFile(ignore, 'b.json\n# initial\n')
+    const baseline = await buildIndexP0(config)
+    let reads = 0
+    const sampled = await buildIndexP0(config, { hooks: { readerHooks: {
+      afterClose: async path => {
+        if (path === ignore && ++reads === 1) await writeFile(path, 'a.ts\n' + '#'.repeat(80))
+      },
+    } } })
+    expect(reads).toBe(1)
+    expect(sampled).toEqual(baseline) // Includes snapshotId, indexFingerprint, facts and coverage.
+    expect(sampled.snapshot.files.map(file => file.path)).toEqual(['.gitignore', 'a.ts'])
+    expect(sampled.symbols).toHaveLength(3)
+    const next = await buildIndexP0(config)
+    expect(next.snapshot.files.map(file => file.path)).toEqual(['b.json'])
+    expect(next.symbols).toEqual([])
+    expect(next.snapshot.snapshotId).not.toBe(sampled.snapshot.snapshotId)
+    expect(next.indexFingerprint).not.toBe(sampled.indexFingerprint)
   })
 
   it('connects real nested declarations by local refs, not repeated names, including variable-bound expressions', async () => {
