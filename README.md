@@ -12,7 +12,7 @@ context compilation, and code-intelligence tools.
 - Cordis peer dependency: `4.0.2`
 - DSH source availability: target packages are reviewed at upstream commit [`a66e4702047846cdaa10c66c9d3df3951f5ea70d`](https://github.com/deepseek-ai/DeepSeek-Harness/commit/a66e4702047846cdaa10c66c9d3df3951f5ea70d).
 - Shared plugin dependencies: `@han_05/dsh-context` and
-  `@han_05/dsh-context-cache`, both `^0.2.1`
+  `@han_05/dsh-context-cache`, both `0.2.0`
 - Availability: optional; enabled by the `v0.2b-readonly` and
   `v0.2c-context` profiles, not included in the v0.1 profile.
 
@@ -48,6 +48,6 @@ pnpm test
 pnpm run test:package-entry
 ```
 
-The standalone package depends on the versioned context contracts
-`@han_05/dsh-context` and `@han_05/dsh-context-cache`, which are published to
-npm as `^0.2.1`. Install them alongside the plugin outside the monorepo.
+The standalone package depends on the published context contracts
+`@han_05/dsh-context` and `@han_05/dsh-context-cache` (`0.2.0`). Install them
+alongside the plugin outside the monorepo.
