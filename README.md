@@ -6,9 +6,10 @@ context compilation, and code-intelligence tools.
 ## Status and compatibility
 
 - Parent repository: [DSH-Plugins](https://github.com/sihan-shen/DS-Plugins)
-- DSH dependency line: `0.1.1-rc.2` (`@deepseek-ai/dsh-subprocess` and
+- DSH dependency line: `0.1.2-rc.1` (`@deepseek-ai/dsh-subprocess` and
   `@deepseek-ai/dsh-tools`)
-- Cordis peer dependency: `4.0.1`
+- Cordis peer dependency: `4.0.2`
+- DSH source availability: target packages are reviewed at upstream commit [`a66e4702047846cdaa10c66c9d3df3951f5ea70d`](https://github.com/deepseek-ai/DeepSeek-Harness/commit/a66e4702047846cdaa10c66c9d3df3951f5ea70d).
 - Shared plugin dependencies: `@han_05/dsh-context` and
   `@han_05/dsh-context-cache`, both `0.2.0`
 - Availability: optional; enabled by the `v0.2b-readonly` and
