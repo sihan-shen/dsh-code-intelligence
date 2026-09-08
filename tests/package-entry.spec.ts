@@ -6,6 +6,12 @@ it('exposes the built plugin entry and package metadata', async () => {
   expect(plugin.name).toBe('dsh-code-intelligence')
   expect(typeof plugin.apply).toBe('function')
   expect(plugin.Config).toBeDefined()
+  // M1 exports foundation APIs without registering M2/M3 Agent tools by default.
+  expect(typeof plugin.buildIndexP0).toBe('function')
+  expect(typeof plugin.createTypeScriptAstExtractorP0).toBe('function')
+  expect(typeof plugin.parseSnapshotConfigP0).toBe('function')
+  expect(typeof plugin.createVerifiedReaderP0).toBe('function')
+  expect(typeof plugin.registerCodeIntelligenceToolsP0).toBe('function')
 
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     exports: Record<string, unknown>

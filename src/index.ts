@@ -17,3 +17,19 @@ export type { SnapshotConfigV1, SourceMeasurementV1, RepositorySnapshotV1, RepoF
 export type { InternalSymbolRelationV1, SymbolAdapterResultV1, InternalSymbolEntryV1 } from './types.js'
 export type { AdapterUnavailableCode, AdapterUnavailableV1, HostNetworkIsolation, LspDeploymentConfigV1, LspDeploymentEnvironmentKey } from './types.js'
 export type { ContextCompiler, ContextCompilerOptions, ContextCompilerStats } from './types.js'
+
+// Additive M1 foundation APIs. Default plugin/runtime registration remains V1.
+export { parseSnapshotConfigP0, collectSnapshotP0 } from './p0-snapshot.js'
+export type { SnapshotHooksP0 } from './p0-snapshot.js'
+export { createVerifiedReaderP0, P0ReadError } from './p0-reader.js'
+export type { VerifiedReaderHooksP0 } from './p0-reader.js'
+export { createCanonicalLineMapP0, positionAtOffsetP0, offsetAtPositionP0, assertOffsetRangeP0, lineRangeToOffsetsP0 } from './p0-line-map.js'
+export { TypeScriptAstExtractorP0, createTypeScriptAstExtractorP0 } from './p0-extractor.js'
+export { buildIndexP0, finalizeIndexP0, indexProvenanceP0, P0BuildError } from './p0-build.js'
+export type { BuildIndexOptionsP0 } from './p0-build.js'
+export { CodeIntelligenceErrorP0, registerCodeIntelligenceToolsP0, CODE_INTELLIGENCE_FAILURE_META_P0 } from './p0-tool-errors.js'
+export type {
+  BuildControlP0, BuiltIndexP0, CanonicalLineMapP0, CollectedSnapshotP0,
+  ExtractionLimitsP0, FileExtractionFactsP0, FileExtractorP0,
+  SnapshotConfigP0, VerifiedFileP0, VerifiedReaderP0, VerifiedReadRequestP0,
+} from './p0-types.js'
