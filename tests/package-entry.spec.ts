@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
-import * as plugin from '@ds-plugins/dsh-code-intelligence'
+import * as plugin from '@han_05/dsh-code-intelligence'
 
 it('exposes the built plugin entry and package metadata', async () => {
   expect(plugin.name).toBe('dsh-code-intelligence')

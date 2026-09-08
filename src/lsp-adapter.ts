@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url'
 import type { Readable, Writable } from 'node:stream'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1, type RepositorySnapshotV1 } from '@ds-plugins/dsh-context'
+import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1, type RepositorySnapshotV1 } from '@han_05/dsh-context'
 import { encodeLspClientMessage, LspFrameDecoder, parseLspResponse, type LspMessage } from './lsp-framing.js'
 import type { AdapterUnavailableCode, AdapterUnavailableV1, HostNetworkIsolation, LspDeploymentConfigV1, SymbolAdapterResultV1 } from './types.js'
 import type { RepositorySnapshotStore } from './snapshot.js'

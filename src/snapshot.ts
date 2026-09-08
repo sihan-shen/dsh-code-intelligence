@@ -11,7 +11,7 @@ import {
   type IgnoreRules,
   type RepoFileSummaryV1,
   type RepositorySnapshotV1,
-} from '@ds-plugins/dsh-context'
+} from '@han_05/dsh-context'
 import {
   HASH_PATTERN,
   MAX_FILE_BYTES,

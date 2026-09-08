@@ -10,9 +10,9 @@ import {
   parseRepoMapPageV1,
   parseSymbolQueryResultV1,
   sha256Utf8,
-} from '@ds-plugins/dsh-context'
-import { ContextCacheStore } from '@ds-plugins/dsh-context-cache'
-import type { CacheBoundaryV1, ContextCacheStoreApiV1 } from '@ds-plugins/dsh-context-cache'
+} from '@han_05/dsh-context'
+import { ContextCacheStore } from '@han_05/dsh-context-cache'
+import type { CacheBoundaryV1, ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
 import { createContextCompiler } from '../src/context-compiler.ts'
 import { parseSnapshotConfig } from '../src/config.ts'
 import { extractFallbackSymbols } from '../src/fallback.ts'

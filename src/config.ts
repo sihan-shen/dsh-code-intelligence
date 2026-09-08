@@ -206,7 +206,7 @@ export function parseSnapshotConfig(value: unknown): SnapshotConfigV1 {
 export const Config = {
   '~standard': {
     version: 1 as const,
-    vendor: '@ds-plugins/dsh-code-intelligence',
+    vendor: '@han_05/dsh-code-intelligence',
     validate(value: unknown) {
       try {
         return { value: parseCodeIntelligenceConfig(value) }

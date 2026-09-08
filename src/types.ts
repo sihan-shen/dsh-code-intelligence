@@ -1,6 +1,6 @@
-import type { InternalSymbolEntryV1, RepositorySnapshotV1, RepoFileSummaryV1 } from '@ds-plugins/dsh-context'
-import type { ContextBlockV1 } from '@ds-plugins/dsh-context'
-import type { ContextCacheStoreApiV1 } from '@ds-plugins/dsh-context-cache'
+import type { InternalSymbolEntryV1, RepositorySnapshotV1, RepoFileSummaryV1 } from '@han_05/dsh-context'
+import type { ContextBlockV1 } from '@han_05/dsh-context'
+import type { ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
 

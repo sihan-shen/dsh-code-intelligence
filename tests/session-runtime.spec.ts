@@ -2,14 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ContextCacheStore } from '@ds-plugins/dsh-context-cache'
+import { ContextCacheStore } from '@han_05/dsh-context-cache'
 import { createContextCompiler } from '../src/context-compiler.ts'
 import { extractFallbackSymbols } from '../src/fallback.ts'
 import { createSessionRuntimeResolver } from '../src/session-runtime.ts'
 import { RepositorySnapshotStore } from '../src/snapshot.ts'
 import { buildSymbolIndex } from '../src/symbol-index.ts'
 
-vi.mock('@ds-plugins/dsh-context-cache', () => ({
+vi.mock('@han_05/dsh-context-cache', () => ({
   ContextCacheStore: { open: vi.fn() },
 }))
 vi.mock('../src/context-compiler.ts', () => ({ createContextCompiler: vi.fn() }))

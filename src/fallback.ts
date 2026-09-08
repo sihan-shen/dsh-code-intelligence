@@ -1,5 +1,5 @@
 import * as ts from 'typescript'
-import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1 } from '@ds-plugins/dsh-context'
+import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1 } from '@han_05/dsh-context'
 import type { RepositorySnapshotStore } from './snapshot.js'
 import type { InternalSymbolRelationV1, SymbolAdapterResultV1 } from './types.js'
 import { bindAdapterSnapshot } from './symbol-index.js'

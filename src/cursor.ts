@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Utf8 } from '@ds-plugins/dsh-context'
+import { canonicalJson, sha256Utf8 } from '@han_05/dsh-context'
 import { MAX_CURSOR_BYTES, PROJECTION_POLICY_VERSION } from './constants.js'
 
 export type ProjectionCursorKind = 'repo-map' | 'symbol-query'

@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { ContextCacheStore } from '@ds-plugins/dsh-context-cache'
+import { ContextCacheStore } from '@han_05/dsh-context-cache'
 import { parseSnapshotConfig } from './config.js'
 import { createContextCompiler } from './context-compiler.js'
 import { extractFallbackSymbols } from './fallback.js'

@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { parseContextBlockV1, parseRepoMapPageV1, parseSymbolQueryResultV1, type ContextBlockV1, type RepoMapPageV1, type SymbolQueryResultV1 } from '@ds-plugins/dsh-context'
+import { parseContextBlockV1, parseRepoMapPageV1, parseSymbolQueryResultV1, type ContextBlockV1, type RepoMapPageV1, type SymbolQueryResultV1 } from '@han_05/dsh-context'
 import { buildRepoMap, querySymbols, type RepoMapOptionsV1, type SymbolQueryV1 } from './projections.js'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
 import type { RepositorySnapshotStore } from './snapshot.js'

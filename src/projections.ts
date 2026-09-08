@@ -6,7 +6,7 @@ import {
   type RepoMapPageV1,
   type RepositorySnapshotV1,
   type SymbolQueryResultV1,
-} from '@ds-plugins/dsh-context'
+} from '@han_05/dsh-context'
 import { MAX_OUTPUT_BYTES, PROJECTION_POLICY_VERSION } from './constants.js'
 import { decodeProjectionCursor, encodeProjectionCursor, type ProjectionCursorKind } from './cursor.js'
 import type { InternalSymbolIndexStore } from './symbol-index.js'

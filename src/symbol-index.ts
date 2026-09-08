@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1, type RepositorySnapshotV1 } from '@ds-plugins/dsh-context'
+import { canonicalJson, sha256Utf8, type InternalSymbolEntryV1, type RepositorySnapshotV1 } from '@han_05/dsh-context'
 import type { InternalSymbolRelationV1, SymbolAdapterResultV1 } from './types.js'
 
 const adapterSnapshots = new WeakMap<object, RepositorySnapshotV1>()

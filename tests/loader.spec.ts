@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { sha256Utf8 } from '@ds-plugins/dsh-context'
+import { sha256Utf8 } from '@han_05/dsh-context'
 import { apply } from '../src/plugin.ts'
 
 const roots: string[] = []
@@ -235,7 +235,7 @@ describe('loadable code intelligence bundle', () => {
     }
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
     expect(await readFile(new URL(manifest.dsh!.bundle!.patch!, packageRoot), 'utf8')).toBe(
-      "- insert:\n    - id: dsh-code-intelligence\n      name: '@ds-plugins/dsh-code-intelligence'\n",
+      "- insert:\n    - id: dsh-code-intelligence\n      name: '@han_05/dsh-code-intelligence'\n",
     )
   })
 

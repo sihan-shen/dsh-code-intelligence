@@ -9,8 +9,8 @@ import {
   type ContextBlockV1,
   type RepoMapPageV1,
   type SymbolQueryResultV1,
-} from '@ds-plugins/dsh-context'
-import type { CacheBoundaryV1, CacheLookupKeyV1, ContextCacheStoreApiV1 } from '@ds-plugins/dsh-context-cache'
+} from '@han_05/dsh-context'
+import type { CacheBoundaryV1, CacheLookupKeyV1, ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
 import { buildRepoMap, querySymbols, type RepoMapOptionsV1, type SymbolQueryV1 } from './projections.js'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
