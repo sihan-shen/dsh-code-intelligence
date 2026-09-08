@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { ContextCacheStore } from '@han_05/dsh-context-cache'
 import { parseSnapshotConfig } from './config.js'
@@ -8,8 +9,6 @@ import { RepositorySnapshotStore } from './snapshot.js'
 import { buildSymbolIndex } from './symbol-index.js'
 import type { ContextCompiler, SnapshotConfigV1 } from './types.js'
 import type { ToolRuntime } from './tools.js'
-
-type Session = NonNullable<ToolRunContext['agent']>['session']
 
 export type WorkspaceRegistry = {
   resolveByPath(path: string): Promise<{ readonly path: string } | undefined>

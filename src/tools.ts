@@ -36,7 +36,7 @@ function render(_args: unknown, value: unknown): Array<{ type: 'text'; text: str
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
-const parameters = (query: boolean) => ({
+const parameters = (query: boolean): ToolDefinition['parameters'] => ({
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -52,34 +52,34 @@ function runtimeFor(source: ToolRuntimeSource, exec: ToolExecution): ToolRuntime
 }
 
 export function createCodeIntelligenceTools(source: ToolRuntimeSource): readonly ToolDefinition[] {
-  const repoMap = {
+  const repoMap: ToolDefinition = {
     name: 'code_repo_map',
     description: 'Return a bounded repository map page for the current immutable snapshot.',
     parameters: parameters(false),
     output: { schema: { type: 'object' }, render },
-    async execute(rawArgs: unknown, exec: ToolExecution): Promise<RepoMapPageV1> {
+    async execute(rawArgs, exec): Promise<RepoMapPageV1> {
       if (exec.signal.aborted) throw exec.signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
       const options = input(rawArgs, false) as RepoMapOptionsV1
       const runtime = await runtimeFor(source, exec)
       return parseRepoMapPageV1(buildRepoMap(runtime.snapshot, runtime.index, options))
     },
-  } as ToolDefinition
-  const symbolQuery = {
+  }
+  const symbolQuery: ToolDefinition = {
     name: 'code_symbol_query',
     description: 'Search bounded symbols in the current immutable repository snapshot.',
     parameters: parameters(true),
     output: { schema: { type: 'object' }, render },
-    async execute(rawArgs: unknown, exec: ToolExecution): Promise<SymbolQueryResultV1> {
+    async execute(rawArgs, exec): Promise<SymbolQueryResultV1> {
       if (exec.signal.aborted) throw exec.signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
       const options = input(rawArgs, true) as SymbolQueryV1
       const runtime = await runtimeFor(source, exec)
       return parseSymbolQueryResultV1(querySymbols(runtime.snapshot, runtime.index, options))
     },
-  } as ToolDefinition
+  }
   return Object.freeze([repoMap, symbolQuery])
 }
 
-const contextParameters = (kind: 'repo-map' | 'symbol' | 'source-window') => ({
+const contextParameters = (kind: 'repo-map' | 'symbol' | 'source-window'): ToolDefinition['parameters'] => ({
   type: 'object',
   additionalProperties: false,
   properties: kind === 'repo-map'
@@ -100,7 +100,7 @@ const contextParameters = (kind: 'repo-map' | 'symbol' | 'source-window') => ({
       : ['blockId', 'path', 'sourceHash', 'startOffset', 'endOffset'],
 })
 
-function contextOutput(): { readonly schema: { readonly type: 'object' }; readonly render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }> } {
+function contextOutput(): ToolDefinition['output'] {
   return {
     schema: { type: 'object' },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
@@ -129,38 +129,38 @@ export function createContextTools(compiler: ContextCompiler): readonly ToolDefi
       : compiler.forSession(exec.agent?.session)
   }
 
-  const repoMap = {
+  const repoMap: ToolDefinition = {
     name: 'context_repo_map',
     description: 'Compile a bounded repository map Context Block for the current immutable snapshot.',
     parameters: contextParameters('repo-map'),
     output: contextOutput(),
-    async execute(rawArgs: unknown, exec: ToolExecution): Promise<ContextBlockV1> {
+    async execute(rawArgs, exec): Promise<ContextBlockV1> {
       if (exec.signal.aborted) throw exec.signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
       const activeCompiler = await compilerFor(exec)
       return parseContextBlockV1(await activeCompiler.repoMap(rawArgs as { snapshotId: string; limit: number; cursor?: string }, exec.signal, sessionKey(exec)))
     },
-  } as ToolDefinition
-  const symbolQuery = {
+  }
+  const symbolQuery: ToolDefinition = {
     name: 'context_symbol_query',
     description: 'Compile bounded symbol matches into a Context Block for the current immutable snapshot.',
     parameters: contextParameters('symbol'),
     output: contextOutput(),
-    async execute(rawArgs: unknown, exec: ToolExecution): Promise<ContextBlockV1> {
+    async execute(rawArgs, exec): Promise<ContextBlockV1> {
       if (exec.signal.aborted) throw exec.signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
       const activeCompiler = await compilerFor(exec)
       return parseContextBlockV1(await activeCompiler.symbolQuery(rawArgs as { snapshotId: string; query: string; limit: number; cursor?: string }, exec.signal, sessionKey(exec)))
     },
-  } as ToolDefinition
-  const expandSource = {
+  }
+  const expandSource: ToolDefinition = {
     name: 'context_expand_source',
     description: 'Expand one bounded, provenance-checked source window from a cached Context Block.',
     parameters: contextParameters('source-window'),
     output: contextOutput(),
-    async execute(rawArgs: unknown, exec: ToolExecution): Promise<ContextBlockV1> {
+    async execute(rawArgs, exec): Promise<ContextBlockV1> {
       if (exec.signal.aborted) throw exec.signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
       const activeCompiler = await compilerFor(exec)
       return parseContextBlockV1(await activeCompiler.expandSource(rawArgs as { blockId: string; path: string; sourceHash: string; startOffset: number; endOffset: number }, exec.signal, sessionKey(exec)))
     },
-  } as ToolDefinition
+  }
   return Object.freeze([repoMap, symbolQuery, expandSource])
 }

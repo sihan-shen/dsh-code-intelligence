@@ -56,11 +56,12 @@ export type CodeIntelligenceConfig = SnapshotConfigV1
 
 const WORKSPACE_REGISTRY_STARTUP_TIMEOUT_MS = 5_000
 
-export function mountCodeIntelligence(ctx: Pick<Context, 'effect'> & {
+type CodeIntelligenceContext = Pick<Context, 'effect' | 'on'> & {
   readonly tools: { register(tool: unknown): () => void }
   readonly provide?: (name: string, value: unknown) => () => void
-  readonly on?: (name: 'session/disposed', listener: (session: object) => void) => () => void
-}, options: CodeIntelligenceRuntimeOptions | SessionCodeIntelligenceRuntimeOptions): void {
+}
+
+export function mountCodeIntelligence(ctx: CodeIntelligenceContext, options: CodeIntelligenceRuntimeOptions | SessionCodeIntelligenceRuntimeOptions): void {
   const dynamic = 'resolver' in options
   const runtime = dynamic ? options.resolver.resolve.bind(options.resolver) : { snapshot: options.snapshot, index: options.index }
   const compiler = dynamic ? createSessionContextCompiler(options.resolver) : options.compiler
@@ -74,9 +75,7 @@ export function mountCodeIntelligence(ctx: Pick<Context, 'effect'> & {
     const disposers = tools.map(tool => ctx.tools.register(tool))
     const disposeSessions = dynamic && typeof ctx.on === 'function'
       ? ctx.on('session/disposed', session => {
-          void options.resolver.release(
-            session as Parameters<SessionRuntimeResolver['release']>[0],
-          )
+          void options.resolver.release(session)
         })
       : undefined
     return async () => {
@@ -97,11 +96,8 @@ export const inject = ['tools'] as const
 export const provide = ['contextCompiler'] as const
 
 export const apply = async (
-  ctx: Pick<Context, 'effect'> & {
+  ctx: CodeIntelligenceContext & {
     readonly inject?: Context['inject']
-    readonly tools: { register(tool: unknown): () => void }
-    readonly on?: (name: 'session/disposed', listener: (session: object) => void) => () => void
-    readonly provide?: (name: string, value: unknown) => () => void
   },
   config: CodeIntelligenceConfig,
 ): Promise<void> => {
