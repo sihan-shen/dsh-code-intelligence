@@ -21,7 +21,11 @@ R1–R4 已实现，生产实现主要位于 `src/p0-runtime.ts`、`src/p0-query
 ## 提交
 
 - `7b5b85e` `docs: record M3 refresh lifecycle implementation plan`
-- （待最终实现测试通过后提交生产代码、测试与文档）
+- `2c6c4f5` `feat: implement M3 refresh lifecycle and tool`
+- `1a2da4a` `docs: record M3 validation and lifecycle limits`
+- `49321b6` `docs: align M3 cache and milestone wording`
+- `ca2cada` `fix: isolate queued refresh cancellation and close`
+- `ac35d97` `test: cover refresh queued during initialization`
 
 ## 验证（截至当前）
 
