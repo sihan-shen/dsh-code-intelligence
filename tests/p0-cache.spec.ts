@@ -6,10 +6,14 @@ import { ContextCacheStore, type CacheBlockReadV1, type CacheLookupReadV1, type 
 import { createContextBlockV1, OUTPUT_POLICY_P0 } from '@han_05/dsh-context'
 import { buildIndexP0 } from '../src/p0-build.ts'
 import { parseSnapshotConfigP0 } from '../src/p0-snapshot.ts'
+import { createVerifiedReaderP0 } from '../src/p0-reader.ts'
+import { expandSourceP0, SourceBudgetP0 } from '../src/p0-source.ts'
 import { relationQueryP0, repoMapP0 } from '../src/p0-query.ts'
 import { cachedP0Query, p0CacheBoundary, readExplicitP0Block } from '../src/p0-cache.ts'
-import type { RuntimeP0 } from '../src/p0-runtime.ts'
+import { createToolsP0 } from '../src/p0-tools.ts'
+import type { RuntimeP0, ResolverP0 } from '../src/p0-runtime.ts'
 import type { ContextBlockV1 } from '../src/types.ts'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })) ) })
@@ -230,5 +234,45 @@ describe('P0 optional cache acceptance', () => {
     const result = await readExplicitP0Block(runtime(cache), block.blockId, file.path, file.contentHash)
     expect(result).toMatchObject({ status: 'hit', block })
     expect(reads).toBe(2)
+  })
+
+  it('suppresses an explicit blockId when it would overflow the source output budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-p0-cache-source-budget-')); roots.push(root)
+    // Size a comment-only TS file so its wholeFile source JSON sits just below the
+    // 65536-byte output ceiling; appending a blockId would then exceed it.
+    await writeFile(join(root, 'big.ts'), `//${'x'.repeat(65187)}\n`)
+    const config = parseSnapshotConfigP0({ deploymentRoot: root, revision: 'source-budget' })
+    const index = await buildIndexP0(config)
+    const receipt = index.snapshot.files.find(file => file.path === 'big.ts')!
+    const reader = await createVerifiedReaderP0(root)
+    const cache = await ContextCacheStore.open({ deploymentRoot: root })
+    const runtime: RuntimeP0 = { index, reader, config, cache }
+
+    const base = await expandSourceP0(index, reader, {
+      snapshotId: index.snapshot.snapshotId, path: 'big.ts', sourceHash: receipt.contentHash, wholeFile: true,
+    })
+    const baseBytes = Buffer.byteLength(JSON.stringify(base))
+    const blockIdBytes = Buffer.byteLength(JSON.stringify('sha256:' + 'a'.repeat(64)))
+    expect(baseBytes).toBeLessThanOrEqual(OUTPUT_POLICY_P0.maxOutputBytes)
+    expect(baseBytes + blockIdBytes).toBeGreaterThan(OUTPUT_POLICY_P0.maxOutputBytes)
+
+    // Produce a confirmed query blockId for this exact path/hash.
+    const map = await cachedP0Query(runtime, root, 'repo-map', { snapshotId: index.snapshot.snapshotId, path: 'big.ts' }, () => repoMapP0(index, { snapshotId: index.snapshot.snapshotId, path: 'big.ts' }))
+    expect(map.blockId).toMatch(/^sha256:/)
+
+    const resolver: ResolverP0 = {
+      async resolve() { return { runtime, budget: new SourceBudgetP0(null), signal: new AbortController().signal, done() {} } },
+      async release() {}, async dispose() {},
+    }
+    const tool = createToolsP0(resolver).find(definition => definition.name === 'context_expand_source')!
+    // The explicit blockId validates, but must NOT turn the near-budget read into a
+    // budget-exceeded failure; it is suppressed instead.
+    const value = await tool.execute({
+      snapshotId: index.snapshot.snapshotId, path: 'big.ts', sourceHash: receipt.contentHash, blockId: map.blockId!, wholeFile: true,
+    }, { signal: new AbortController().signal } as ToolRunContext)
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(OUTPUT_POLICY_P0.maxOutputBytes)
+    expect(value).not.toHaveProperty('blockId')
+    expect(value).toMatchObject({ path: 'big.ts', sourceHash: receipt.contentHash })
+    await cache.close()
   })
 })

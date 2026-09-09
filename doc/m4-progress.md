@@ -21,7 +21,13 @@
 
 ## 验证
 
-当前包已通过直接调用 `./node_modules/.bin/tsc -b --pretty false`、`./node_modules/.bin/tsdown --config tsdown.config.ts`、`./node_modules/.bin/vitest run`（26 files / 231 tests；含 C4 cache acceptance、Web controller、Host settings、package-entry、Native loader/client bundle 覆盖）和 `git diff --check`。两个跨包仓库工作树均干净，且各自 C1/full contract tests 已通过。
+当前包已通过直接调用 `./node_modules/.bin/tsc -b --pretty false`、`./node_modules/.bin/tsdown --config tsdown.config.ts`、`./node_modules/.bin/vitest run`（26 files / 244 tests；含 C4 cache acceptance、blockId 输出预算回归、Web controller、Host settings、package-entry、Native loader/client bundle 覆盖）和 `git diff --check`。两个跨包仓库工作树均干净，且各自 C1/full contract tests 已通过。
+
+## 主线程复核修正
+
+- `context_expand_source` 显式 `blockId` 不再把接近输出预算的合法源码读取转为 `budget-exceeded`：此前无条件回填 `blockId`，在源码结果字节数位于 `(maxOutputBytes - blockId, maxOutputBytes]` 区间时由适配器判定超预算；现在与查询缓存一致，仅在回填后不超过共享上限时才附加，否则保留直接读取结果。`src/p0-tools.ts`。
+- 候选 runtime 的 cache 在 `beforeCommit` 屏障抛错时也会关闭：此前只有 `commit` 失败才 `closeRuntime(candidate)`，屏障抛错会遗漏清理（测试注入 seam，生产 `beforeCommit` 为空）。`startInitial` 与 `enqueueRefresh` 两处统一把 `beforeCommit` 与 `commit` 纳入同一个 try/catch。`src/p0-runtime.ts`。
+- 新增 `tests/p0-cache.spec.ts` 回归：逐字节构造近上限（`//`+65187 个 `x`）的 wholeFile 源码，先断言基础结果 ≤ `maxOutputBytes` 而回填 `blockId` 后超限，再经 `createToolsP0` 调用 `context_expand_source` 断言不抛 `budget-exceeded` 且不再附加 `blockId`；无修复时该测试在 `outputBudgetP0` 处失败。
 
 ## 未完成 / 限制
 

@@ -262,8 +262,9 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     state.initialWaitSignal = waitController.signal
     const operationId = queuedOperationId ?? state.nextOperationId++
     const task = buildCandidate(session, state, AbortSignal.any([operationSignal, waitController.signal]), phase, operationId).then(async candidate => {
-      await hooks.beforeCommit?.(phase, candidate)
       try {
+        // beforeCommit is owned by the candidate: a throw here must release it too.
+        await hooks.beforeCommit?.(phase, candidate)
         commit(session, state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]), operationId, phase)
       } catch (error) {
         await closeRuntime(candidate)
@@ -304,8 +305,8 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         ? await buildCandidate(session, state, taskSignal, 'refresh', operationId)
         : await startInitial(session, state, taskSignal, 'refresh', operationId)
       if (before) {
-        await hooks.beforeCommit?.('refresh', candidate)
         try {
+          await hooks.beforeCommit?.('refresh', candidate)
           commit(session, state, candidate, taskSignal, operationId, 'refresh')
         } catch (error) {
           await closeRuntime(candidate)

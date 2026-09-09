@@ -7,9 +7,12 @@ Bounded repository facts and verified source reads for coding agents.
 **This branch implements M4 C1–C4 for the optional-cache P0 runtime resource model, including the Host settings namespace and Web settings card.**
 Main-thread review fixed competing first builds after initialization failure,
 isolated query leases from initialization deadlines, and added deterministic
-queue/retry/commit/retirement regressions. A bounded injectable lifecycle event
+queue/retry/commit/retirement regressions. A follow-up M4 review made an explicit
+`context_expand_source` `blockId` never turn a near-budget source read into
+`budget-exceeded` (it is omitted instead), and closed a candidate cache when the
+`beforeCommit` barrier throws. A bounded injectable lifecycle event
 sink is available for programmatic hosts; the default plugin intentionally does
-not extend the cross-package session-event contract. See [M3 progress](doc/m3-progress.md).
+not extend the cross-package session-event contract. See [M3 progress](doc/m3-progress.md) and [M4 progress](doc/m4-progress.md).
 The planned milestone label is `0.3.0-alpha.3`; **`package.json` remains `0.2.1`**
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
@@ -94,7 +97,7 @@ Lines share the same map as symbol positions: CRLF, LF, CR, U+2028 and U+2029,
 including an empty final line after a terminator. Empty offset windows are legal;
 surrogate-pair splits are not. Optional `paddingLines` is 0–20 per side, only for
 range modes, expanding to full touched lines and clipping padding at file edges.
-Explicit `blockId` is checked against the captured workspace/snapshot/index boundary when cache is enabled: missing or corrupt records return `not-found`, stale boundaries return `stale-block`, and unavailable storage returns `cache-unavailable`. Without a block reference, source always uses verified reads and the Session budget.
+Explicit `blockId` is checked against the captured workspace/snapshot/index boundary when cache is enabled: missing or corrupt records return `not-found`, stale boundaries return `stale-block`, and unavailable storage returns `cache-unavailable`. A validated `blockId` is re-attached only when it still fits the output budget; otherwise it is omitted rather than failing the read. Without a block reference, source always uses verified reads and the Session budget.
 
 All agents/root calls within one live Session share a source-success budget:
 default **262,144 final JSON bytes**, including source escaping and package metadata,

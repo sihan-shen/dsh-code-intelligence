@@ -36,7 +36,11 @@ async function expandSourceWithOptionalBlock(runtime: Awaited<ReturnType<Resolve
   }
   const { blockId: _blockId, ...directRequest } = parsed
   const result = await expandSourceP0(runtime.index, runtime.reader, directRequest, { signal }, runtime.config.nestedCheckoutRoots)
-  return parsed.blockId === undefined ? result : { ...result, blockId: parsed.blockId }
+  if (parsed.blockId === undefined) return result
+  // The blockId is optional evidence; it must not turn a valid source read into a
+  // budget-exceeded failure. Suppress it (mirroring the query cache) when it overflows.
+  const associated = { ...result, blockId: parsed.blockId }
+  return outputBytesP0(associated) <= O.maxOutputBytes ? associated : result
 }
 
 export function createToolsP0(resolver: ResolverP0): readonly ToolDefinition[] {
