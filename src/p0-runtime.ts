@@ -59,9 +59,10 @@ export function translateP0(error: unknown, phase: 'initialization' | 'refresh' 
 }
 export type RuntimeP0 = { readonly index: BuiltIndexP0; readonly reader: VerifiedReaderP0; readonly config: SnapshotConfigP0 }
 export type RuntimeEventP0 = Readonly<{
-  kind: 'build-started' | 'build-retried' | 'build-succeeded' | 'build-failed' | 'refresh-queued' | 'runtime-committed' | 'runtime-retired' | 'runtime-released' | 'session-closing' | 'session-closed'
-  operationId?: number; phase?: 'initialization' | 'refresh'; sessionId?: string; queueDepth?: number; durationMs?: number; reason?: string
-  previousSnapshotId?: string; snapshotId?: string; indexFingerprint?: string
+  kind: 'build-started' | 'build-retried' | 'build-succeeded' | 'build-failed' | 'refresh-queued' | 'refresh-started' | 'operation-failed' | 'runtime-committed' | 'runtime-retired' | 'runtime-released' | 'session-closing' | 'session-closed'
+  operationId?: number; phase?: 'initialization' | 'refresh'; sessionId?: string; queueDepth?: number; durationMs?: number; queueDurationMs?: number; reason?: string
+  previousSnapshotId?: string; snapshotId?: string; indexFingerprint?: string; scanCoverage?: BuiltIndexP0['scanCoverage']
+  extraction?: Readonly<{ completeFileCount: number; partialFileCount: number; failedFileCount: number; unsupportedFileCount: number }>
 }>
 /** Optional integration/test seams. Observer/sink failures never alter runtime behavior;
  * beforeCommit is an awaited deterministic test barrier. */
@@ -116,6 +117,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
   }
   const failureReason = (error: unknown): string => error instanceof P0ReadError || error instanceof P0BuildError ? error.reason
     : error instanceof HarnessError ? error.code : error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'unexpected'
+  const extractionSummary = (index: BuiltIndexP0) => ({
+    completeFileCount: index.fileExtractionStates.filter(file => file.status === 'complete').length,
+    partialFileCount: index.fileExtractionStates.filter(file => file.status === 'partial').length,
+    failedFileCount: index.fileExtractionStates.filter(file => file.status === 'failed').length,
+    unsupportedFileCount: index.fileExtractionStates.filter(file => file.status === 'unsupported').length,
+  })
 
   async function buildCandidate(session: Session, state: SessionState, operationSignal: AbortSignal, phase: 'initialization' | 'refresh', operationId: number): Promise<RuntimeP0> {
     const controller = new AbortController()
@@ -161,7 +168,8 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       checkBuildControlP0(control)
       if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
       const runtime = Object.freeze({ index, reader, config: parsed })
-      emit({ kind: 'build-succeeded', ...eventBase, durationMs: Date.now() - startedAt, snapshotId: index.snapshot.snapshotId, indexFingerprint: index.indexFingerprint })
+      emit({ kind: 'build-succeeded', ...eventBase, durationMs: Date.now() - startedAt, snapshotId: index.snapshot.snapshotId, indexFingerprint: index.indexFingerprint,
+        extraction: extractionSummary(index), scanCoverage: index.scanCoverage })
       return runtime
     } catch (error) {
       let translated: unknown = error
@@ -228,10 +236,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     if (state.refreshQueueDepth >= MAX_REFRESH_QUEUE_P0) throw refreshOverloaded()
     const wasEmpty = state.refreshQueueDepth++ === 0
     const operationId = state.nextOperationId++
+    const queuedAt = Date.now()
     emit({ kind: 'refresh-queued', operationId, phase: 'refresh', sessionId: sessionId(session), queueDepth: state.refreshQueueDepth })
     const taskSignal = AbortSignal.any([signal, state.controller.signal])
     const previous = state.refreshTail
     const run = async () => {
+      emit({ kind: 'refresh-started', operationId, phase: 'refresh', sessionId: sessionId(session), queueDurationMs: Date.now() - queuedAt, queueDepth: state.refreshQueueDepth })
       taskSignal.throwIfAborted()
       if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
       // A refresh arriving during initialization waits for that operation, but does not
@@ -253,7 +263,10 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     // Start an idle queue head synchronously: it owns initialization before any
     // later query can arrive. Every refresh, including first build, counts toward
     // the same bound and follows the same tail.
-    const task = (wasEmpty ? run() : previous.then(run)).finally(() => { state.refreshQueueDepth-- })
+    const task = (wasEmpty ? run() : previous.then(run)).catch(error => {
+      emit({ kind: 'operation-failed', operationId, phase: 'refresh', sessionId: sessionId(session), reason: failureReason(error) })
+      throw error
+    }).finally(() => { state.refreshQueueDepth-- })
     state.refreshTail = task.then(() => {}, () => {})
     return task
   }

@@ -46,5 +46,7 @@ node node_modules/tsdown/dist/run.mjs --out-dir lib --external typescript
 - `15abaca`：修复初始化失败后队首 refresh 未登记 initial、普通查询/后续 refresh 可启动竞争构建的问题。所有 refresh 统一进入同一有界队列，idle 首建也计入 16 上限；无 active 的队首构建进入共享初始化。提交异常也恢复初始化状态，关闭先发布清理 Promise 再广播 abort，防止同步监听器重入。
 - 新增 `tests/p0-refresh-review.spec.ts` 四个确定性屏障测试：初始化失败后的共享构建、idle 首建过载/真正排队取消、已排队任务在前项失败后继续、仅由关闭取消候选及等待旧 lease。纠正原测试名称与断言不符的表述。
 - 主线程验证：全量 22 文件 / 214 测试通过；TypeScript noEmit 类型检查、tsdown 构建、git diff --check 通过。
-- 尚未完成：resolver 级读取竞争全量重试次数、提交前屏障、退役释放/清理失败不回滚证据，以及设计 §7.3 要求的生命周期结构化日志。现有 P0 runtime 仅持有内存索引与无长期句柄的 reader；不能把垃圾回收当成已测试的可失败 close 操作。
-- 日志接入待确认：当前 plugin/resolver 未提供日志 sink；邻包 telemetry 是 session/event 的被动采集器，未提供任意日志写入服务。不擅自新增遥测框架或变更跨包事件合同。README 已降级为主路径已实现、R4 完整验收待完成。
+- `3e0119a`：查询 lease 只组合调用方与 Session signal；初始化 deadline 仅用于等待共享初始化，不再泄漏到已发布 runtime 的新查询。新增最小 `ResolverHooksP0` 测试/集成 seam，验证读取竞争只全量重试一次、非读取错误不重试、提交前仅取消不关闭仍不发布、退役 runtime 在最后 lease `done()` 后解除引用，以及 observer/sink 故障不改变提交结果。
+- 结构化 `RuntimeEventP0` sink 覆盖排队/开始/重试/成功/失败/提交/退役/引用释放/关闭，携带有界 operation/session 关联、耗时、前后 snapshot/index、提取与扫描摘要；不记录源码、绝对路径或原始异常文本。sink 为程序化可注入接口且故障隔离；默认 plugin 按授权不扩展跨包 `session/event` 合同，因此默认部署接线仍待宿主后续明确。
+- 当前 runtime 仅持有内存索引与无长期句柄 reader；退役的真实清理是解除引用，已验证 lease 边界。不存在可失败的 runtime close 操作，故“提交后 close 失败不回滚”对当前资源模型为 N/A；文件描述符由 reader `finally` 关闭，不新增虚假 close。
+- 最终主线程验证：全量 22 文件 / 218 测试通过；TypeScript noEmit 类型检查、tsdown 构建、git diff --check 通过。M3 无 cache 主路径与适用于当前资源模型的 R1–R4 验收完成；默认日志接线、M4 cache、M5 独立真实仓 gold/正式 runner、watcher/增量及下游迁移不在该完成声明内。
