@@ -4,7 +4,7 @@ Bounded repository facts and verified source reads for coding agents.
 
 ## Status and compatibility
 
-**This branch implements M3 (R1–R4) for the current no-cache P0 runtime resource model.**
+**This branch implements M4 C1–C3 for the optional-cache P0 runtime resource model.**
 Main-thread review fixed competing first builds after initialization failure,
 isolated query leases from initialization deadlines, and added deterministic
 queue/retry/commit/retirement regressions. A bounded injectable lifecycle event
@@ -14,8 +14,7 @@ The planned milestone label is `0.3.0-alpha.3`; **`package.json` remains `0.2.1`
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
 
-- Default bundle: five P0 tools, listed below. No V1 `contextCompiler` service,
-  `code_*` aliases, cache opening/writes, or invented `blockId`.
+- Default bundle: five P0 tools, listed below. The cache is disabled by default and is opened only when `cache.enabled` is true in resolved startup settings. Cache failures degrade to the same verified query/source behavior; unconfirmed writes never expose `blockId`.
 - Existing V1 programmatic APIs (`createContextCompiler`, `createContextTools`,
   `createCodeIntelligenceTools`, `mountCodeIntelligence`, V1 snapshot/query APIs)
   remain exported. They are **not** a legacy default-plugin mode. Default `apply`
@@ -95,7 +94,7 @@ Lines share the same map as symbol positions: CRLF, LF, CR, U+2028 and U+2029,
 including an empty final line after a terminator. Empty offset windows are legal;
 surrogate-pair splits are not. Optional `paddingLines` is 0–20 per side, only for
 range modes, expanding to full touched lines and clipping padding at file edges.
-Explicit `blockId` returns `cache-unavailable` while the optional M4 cache is not implemented; omit it.
+Explicit `blockId` is checked against the captured workspace/snapshot/index boundary when cache is enabled: missing or corrupt records return `not-found`, stale boundaries return `stale-block`, and unavailable storage returns `cache-unavailable`. Without a block reference, source always uses verified reads and the Session budget.
 
 All agents/root calls within one live Session share a source-success budget:
 default **262,144 final JSON bytes**, including source escaping and package metadata,

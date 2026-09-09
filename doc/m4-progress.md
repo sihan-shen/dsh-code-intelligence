@@ -11,10 +11,18 @@
 - 接入前审计默认 plugin 的 cache 获取方式。当前 P0 默认 resolver 没有 cache 注入服务，Cordis 中也没有现成 cache service；因此在确认 cache 启用开关、目录和配置前不擅自设计默认服务协议或默认启用行为。若现有接口不足，暂停并报告具体合同问题。
 - 每个跨包合同先在所属仓库完成测试与提交，再在本包接入；最后运行各受影响仓库的 typecheck/build、全量 Vitest、diff-check，并更新 README/本记录。
 
-## 当前阶段
+## 已完成
 
-计划提交后开始 C1 合同实施。任何公共 DTO、cache 注入或默认配置歧义按任务要求立即停止，不以猜测替代合同。
+- `../dsh-context-cache`：C1 合同与确定性边界测试已提交：`c670e54`、`09588d2`、`3ee91a2`。覆盖确认写入、显式 block/lookup 分类、锁超时、损坏、workspace 隔离、indexFingerprint、淘汰与关闭。
+- `../dsh-context`：最小 DTO/parser 修改已提交：`042ae8c`（可选 `indexFingerprint`）与 `c16ccdc`（relation block kind）。全量测试通过。
+- 当前包：`0bc744c` 接入可选 cache 查询包装和显式 block 分类；`e8c4c38` 保证 cache 初始化失败降级；`a40f09b` 暴露 `code-intelligence` resolver service。默认 `cache.enabled` 为 false；refresh 不缓存；无 cache 查询/source 仍可用。
 
-## 验证与提交
+## 验证
 
-待实施后按仓库分别记录命令、结果、commit 和未完成限制；不宣称 M5、发布、真实仓 gold 或收益。
+当前包已通过 `pnpm run typecheck`、`pnpm test -- --run`（22 files / 218 tests）、`pnpm run build` 和 `git diff --check`。两个跨包仓库工作树均干净，且各自 C1/full contract tests 已通过。
+
+## 未完成 / 限制
+
+- Host settings namespace schema 与 DSH Web `settings.plugin.item` Code Intelligence 卡片尚未实现。
+- 当前插件没有可直接解析的官方 client bundle 依赖：`require.resolve` 对 `@deepseek-ai/dsh-client-ui-settings/client`、`@deepseek-ai/dsh-client-ui-settings-plugins/client`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-store`、`react`、`@types/react` 均失败。按用户批准的 unblock 范围，需要仅修改本包 manifest/build 配置并在不改 lockfile、不安装依赖的条件下继续；若 typecheck/build 无法解析则必须保持 BLOCKED。
+- C4 专门跨运行时/预算/淘汰回归测试、Host/Web settings client bundle 尚未提交；不宣称 M5、发布、真实仓 gold 或收益。
