@@ -5,11 +5,13 @@
     "declarationMap": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "./lib",
-    "rootDir": ".",
+    "outDir": "./lib/types",
+    "rootDir": "src",
     "skipLibCheck": true,
     "strict": true,
-    "target": "ES2022"
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

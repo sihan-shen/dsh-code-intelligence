@@ -4,18 +4,20 @@ Bounded repository facts and verified source reads for coding agents.
 
 ## Status and compatibility
 
-**This branch implements M3 (R1–R4) for the current no-cache P0 runtime resource model.**
+**This branch implements M4 C1–C4 for the optional-cache P0 runtime resource model, including the Host settings namespace and Web settings card.**
 Main-thread review fixed competing first builds after initialization failure,
 isolated query leases from initialization deadlines, and added deterministic
-queue/retry/commit/retirement regressions. A bounded injectable lifecycle event
+queue/retry/commit/retirement regressions. A follow-up M4 review made an explicit
+`context_expand_source` `blockId` never turn a near-budget source read into
+`budget-exceeded` (it is omitted instead), and closed a candidate cache when the
+`beforeCommit` barrier throws. A bounded injectable lifecycle event
 sink is available for programmatic hosts; the default plugin intentionally does
-not extend the cross-package session-event contract. See [M3 progress](doc/m3-progress.md).
+not extend the cross-package session-event contract. See [M3 progress](doc/m3-progress.md) and [M4 progress](doc/m4-progress.md).
 The planned milestone label is `0.3.0-alpha.3`; **`package.json` remains `0.2.1`**
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
 
-- Default bundle: five P0 tools, listed below. No V1 `contextCompiler` service,
-  `code_*` aliases, cache opening/writes, or invented `blockId`.
+- Default bundle: five P0 tools, listed below. The cache is disabled by default and is opened only when `cache.enabled` is true in resolved startup settings. Cache failures degrade to the same verified query/source behavior; unconfirmed writes never expose `blockId`.
 - Existing V1 programmatic APIs (`createContextCompiler`, `createContextTools`,
   `createCodeIntelligenceTools`, `mountCodeIntelligence`, V1 snapshot/query APIs)
   remain exported. They are **not** a legacy default-plugin mode. Default `apply`
@@ -95,7 +97,7 @@ Lines share the same map as symbol positions: CRLF, LF, CR, U+2028 and U+2029,
 including an empty final line after a terminator. Empty offset windows are legal;
 surrogate-pair splits are not. Optional `paddingLines` is 0–20 per side, only for
 range modes, expanding to full touched lines and clipping padding at file edges.
-Explicit `blockId` returns `cache-unavailable` while the optional M4 cache is not implemented; omit it.
+Explicit `blockId` is checked against the captured workspace/snapshot/index boundary when cache is enabled: missing or corrupt records return `not-found`, stale boundaries return `stale-block`, and unavailable storage returns `cache-unavailable`. A validated `blockId` is re-attached only when it still fits the output budget; otherwise it is omitted rather than failing the read. Without a block reference, source always uses verified reads and the Session budget.
 
 All agents/root calls within one live Session share a source-success budget:
 default **262,144 final JSON bytes**, including source escaping and package metadata,
@@ -131,8 +133,7 @@ to squeeze into a budget. Host post-processing/transport cost is not measured.
   reset the Session source budget. Cancellation/deadline remain cooperative; synchronous
   TypeScript parsing cannot be hard-interrupted. `context_refresh_snapshot` is the
   only refresh path; there is no watcher.
-- **M4 is not complete:** no P0 cache, block persistence, explicit stale/missing
-  block classification, or migrated downstream compiler integration.
+- **M4 C1–C4 are implemented for the P0 runtime.** This includes deterministic cache-boundary, fallback, budget, lifecycle, Host settings, and Web settings-surface coverage. Downstream V1 compiler consumers are not migrated here.
 - **M5 is not complete:** no fixed real-repository independent gold/edit-refresh
   acceptance or release. No claim of retrieval savings or coding-task benefit;
   benefit status is **not-ready**.
@@ -178,4 +179,4 @@ control-flow bugs, additional cursor/escaped-JSON/source-range checks, and the
 200-test full-suite result. A subsequent [main-thread review](doc/m2-review-round2.md)
 fixed the outer Native bridge also misclassifying caller-owned cancellation reasons,
 added registry/Unicode-endpoint/reentrant-close regressions, and passed **205 tests**.
-This does not certify M4–M5 or downstream migration.
+This does not certify M5, downstream migration, publication, real-repository gold fixtures, or performance gains.

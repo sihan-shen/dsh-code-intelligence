@@ -9,7 +9,7 @@ import {
 } from './constants.js'
 import type { LspDeploymentConfigV1, LspDeploymentEnvironmentKey, SnapshotConfigV1 } from './types.js'
 
-const CONFIG_KEYS = ['workspaceRoot', 'deploymentRoot', 'revision', 'maxFileBytes', 'maxFiles', 'maxTotalBytes', 'maxDirectories', 'maxIgnoreBytes', 'nestedCheckoutRoots'] as const
+const CONFIG_KEYS = ['workspaceRoot', 'deploymentRoot', 'revision', 'maxFileBytes', 'maxFiles', 'maxTotalBytes', 'maxDirectories', 'maxIgnoreBytes', 'nestedCheckoutRoots', 'cache'] as const
 const REQUIRED_CONFIG_KEYS = ['deploymentRoot', 'revision', 'maxFileBytes', 'maxFiles', 'maxTotalBytes', 'maxDirectories', 'maxIgnoreBytes', 'nestedCheckoutRoots'] as const
 const LSP_CONFIG_KEYS = ['executable', 'fixedArgs', 'environment', 'timeoutMs', 'maxMessageBytes', 'maxStderrBytes', 'graceMs'] as const
 const LSP_ENVIRONMENT_KEYS = ['LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP'] as const
@@ -163,6 +163,15 @@ export function parseCodeIntelligenceConfig(value: unknown): SnapshotConfigV1 {
   const root = stringValue(object.deploymentRoot, 'deploymentRoot')
   if (!isAbsolute(root)) validateRelativeDeploymentRoot(root)
   const nestedCheckoutRoots = object.nestedCheckoutRoots
+  const cacheInput = object.cache === undefined ? {} : record(object.cache)
+  allowedKeys(cacheInput, ['enabled', 'maxEntries', 'maxBytes', 'lockTimeoutMs'], 'cache')
+  const enabled: unknown = cacheInput.enabled === undefined ? false : cacheInput.enabled
+  const maxEntries: unknown = cacheInput.maxEntries === undefined ? 10_000 : cacheInput.maxEntries
+  const maxBytes: unknown = cacheInput.maxBytes === undefined ? 268_435_456 : cacheInput.maxBytes
+  const lockTimeoutMs: unknown = cacheInput.lockTimeoutMs === undefined ? 250 : cacheInput.lockTimeoutMs
+  if (typeof enabled !== 'boolean' || typeof maxEntries !== 'number' || typeof maxBytes !== 'number' || typeof lockTimeoutMs !== 'number') throw new TypeError('cache values are invalid')
+  const cache = Object.freeze({ enabled, maxEntries, maxBytes, lockTimeoutMs })
+  if (typeof cache.enabled !== 'boolean' || !Number.isSafeInteger(cache.maxEntries) || cache.maxEntries < 1 || cache.maxEntries > 10_000 || !Number.isSafeInteger(cache.maxBytes) || cache.maxBytes < 1 || cache.maxBytes > 268_435_456 || !Number.isSafeInteger(cache.lockTimeoutMs) || cache.lockTimeoutMs < 0) throw new TypeError('cache values are invalid')
   if (!Array.isArray(nestedCheckoutRoots)) throw new TypeError('nestedCheckoutRoots must be an array')
   const normalizedNestedRoots = nestedCheckoutRoots.map((item, index) => safeRelativePath(item, `nestedCheckoutRoots[${index}]`))
   if (new Set(normalizedNestedRoots).size !== normalizedNestedRoots.length) throw new TypeError('nestedCheckoutRoots must not contain duplicates')
@@ -176,6 +185,7 @@ export function parseCodeIntelligenceConfig(value: unknown): SnapshotConfigV1 {
     maxDirectories: boundedInteger(object.maxDirectories, 'maxDirectories', MAX_DIRECTORIES),
     maxIgnoreBytes: boundedInteger(object.maxIgnoreBytes, 'maxIgnoreBytes', MAX_IGNORE_BYTES),
     nestedCheckoutRoots: normalizedNestedRoots,
+    ...(Object.prototype.hasOwnProperty.call(object, 'cache') ? { cache } : {}),
   } satisfies SnapshotConfigV1
   return Object.freeze({ ...config, nestedCheckoutRoots: Object.freeze([...config.nestedCheckoutRoots]) })
 }

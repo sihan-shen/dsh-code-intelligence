@@ -4,6 +4,13 @@ import type { ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
 
+export type CacheConfigV1 = {
+  readonly enabled?: boolean
+  readonly maxEntries?: number
+  readonly maxBytes?: number
+  readonly lockTimeoutMs?: number
+}
+
 export type SnapshotConfigV1 = {
   readonly workspaceRoot?: string
   readonly deploymentRoot: string
@@ -14,6 +21,7 @@ export type SnapshotConfigV1 = {
   readonly maxDirectories: number
   readonly maxIgnoreBytes: number
   readonly nestedCheckoutRoots: readonly string[]
+  readonly cache?: CacheConfigV1
 }
 
 export type LspDeploymentEnvironmentKey = 'LANG' | 'LC_ALL' | 'TMPDIR' | 'TEMP' | 'TMP'
@@ -86,7 +94,8 @@ export type ContextCompilerOptions = {
   readonly workspaceRoot: string
   readonly store: RepositorySnapshotStore
   readonly index: InternalSymbolIndexStore
-  readonly cache: ContextCacheStoreApiV1
+  readonly cache?: ContextCacheStoreApiV1
   readonly compilerPolicyVersion?: string
   readonly capabilityVersion?: string
+  readonly indexFingerprint?: string
 }

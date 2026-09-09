@@ -36,7 +36,11 @@ export async function createCodeIntelligenceRuntime(
   config: SnapshotConfigV1,
 ): Promise<SessionCodeIntelligenceRuntime> {
   const parsed = parseSnapshotConfig(config)
-  const cache = await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot })
+  const cacheConfig = config.cache
+  let cache: Awaited<ReturnType<typeof ContextCacheStore.open>> | undefined
+  if (cacheConfig?.enabled === true) {
+    try { cache = await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot, maxEntries: cacheConfig.maxEntries, maxBytes: cacheConfig.maxBytes, lockTimeoutMs: cacheConfig.lockTimeoutMs }) } catch { cache = undefined }
+  }
   try {
     const store = await RepositorySnapshotStore.create(parsed)
     const adapter = await extractFallbackSymbols(store)
@@ -44,7 +48,7 @@ export async function createCodeIntelligenceRuntime(
     const compiler = createContextCompiler({ workspaceRoot: parsed.deploymentRoot, store, index, cache })
     return Object.freeze({ snapshot: store.snapshot, index, compiler })
   } catch (error) {
-    await cache.close()
+    await cache?.close()
     throw error
   }
 }

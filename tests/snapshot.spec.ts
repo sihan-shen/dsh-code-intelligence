@@ -56,12 +56,12 @@ describe('snapshot configuration', () => {
 })
 
 describe('RepositorySnapshotStore', () => {
-  it('does not include a runtime-created context cache when the workspace has no gitignore', async () => {
+  it('creates a runtime context cache only when explicitly enabled', async () => {
     const root = await temporaryRoot()
     await writeFile(join(root, 'source.ts'), 'export const source = true\n')
     await expect(lstat(join(root, '.gitignore'))).rejects.toThrow()
 
-    const resolver = createSessionRuntimeResolver(config(root))
+    const resolver = createSessionRuntimeResolver(config(root, { cache: { enabled: true } }))
     const runtime = await resolver.resolveDefault()
 
     await expect(lstat(join(root, '.dsh-context-cache'))).resolves.toBeDefined()
@@ -72,7 +72,7 @@ describe('RepositorySnapshotStore', () => {
   it('does not allow source expansion to read a runtime cache file', async () => {
     const root = await temporaryRoot()
     await writeFile(join(root, 'source.ts'), 'export const source = true\n')
-    const resolver = createSessionRuntimeResolver(config(root))
+    const resolver = createSessionRuntimeResolver(config(root, { cache: { enabled: true } }))
     const runtime = await resolver.resolveDefault()
     const base = await runtime.compiler.repoMap({ snapshotId: runtime.snapshot.snapshotId, limit: 50 }, new AbortController().signal)
     const cachePath = '.dsh-context-cache/v1/.access-clock'

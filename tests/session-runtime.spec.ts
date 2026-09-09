@@ -77,6 +77,17 @@ afterEach(async () => {
 })
 
 describe('session runtime lifecycle', () => {
+  it('closes an opened cache when runtime initialization fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-session-runtime-init-'))
+    roots.push(root)
+    const close = vi.fn(async () => {})
+    vi.mocked(ContextCacheStore.open).mockResolvedValue({ close } as never)
+    vi.mocked(RepositorySnapshotStore.create).mockRejectedValue(new Error('snapshot failed'))
+    const resolver = createSessionRuntimeResolver({ ...config(root), cache: { enabled: true } }, { async resolveByPath(path) { return { path } } })
+    await expect(resolver.resolveDefault()).rejects.toThrow('snapshot failed')
+    expect(close).toHaveBeenCalledTimes(1)
+    await resolver.dispose()
+  })
   it('drains a fire-and-forget release during resolver disposal', async () => {
     const controlled = await controlledResolver()
     void controlled.resolver.release(controlled.session)
