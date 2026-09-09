@@ -41,6 +41,7 @@ describe('code-intelligence Host settings', () => {
     const fiber = await ctx.plugin(apply, { deploymentRoot: '.', revision: 'settings-test' })
     expect(ctx.settings.describe().find(item => item.ns === 'code-intelligence')?.applies).toBe('restart')
     await fiber.dispose()
+    expect(ctx.settings.describe().some(item => item.ns === 'code-intelligence')).toBe(false)
     await tools.dispose()
     await sessions.dispose()
     await settingsFiber.dispose()
