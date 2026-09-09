@@ -1,4 +1,6 @@
 import { realpath, stat } from 'node:fs/promises'
+import { ContextCacheStore } from '@han_05/dsh-context-cache'
+import type { ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
 import { isAbsolute } from 'node:path'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -11,17 +13,24 @@ import { SourceBudgetP0 } from './p0-source.js'
 import type { BuiltIndexP0, SnapshotConfigP0, VerifiedReaderP0 } from './p0-types.js'
 import type { WorkspaceRegistry } from './session-runtime.js'
 
+export type CacheConfigP0 = {
+  readonly enabled: boolean
+  readonly maxEntries: number
+  readonly maxBytes: number
+  readonly lockTimeoutMs: number
+}
 export type ConfigP0 = Omit<SnapshotConfigP0, 'workspaceRoot'> & {
   readonly workspaceRoot?: string
   readonly sessionSourceBytes: number | null
   readonly initializationTimeoutMs: number
+  readonly cache: CacheConfigP0
 }
 /** Loader-stage syntax/limits only: Session workspace resolution happens at first use. */
 export function parseConfigP0(raw: unknown): ConfigP0 {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new TypeError('Expected configuration object')
   const input = raw as Record<string, unknown>
   const limits = ['maxFileBytes', 'maxFiles', 'maxTotalBytes', 'maxDirectories', 'maxScanEntries', 'maxIgnoreBytes', 'maxIgnorePatterns'] as const
-  const keys = ['workspaceRoot', 'deploymentRoot', 'revision', 'nestedCheckoutRoots', 'sessionSourceBytes', 'initializationTimeoutMs', ...limits]
+  const keys = ['workspaceRoot', 'deploymentRoot', 'revision', 'nestedCheckoutRoots', 'sessionSourceBytes', 'initializationTimeoutMs', 'cache', ...limits]
   if (Reflect.ownKeys(input).some(k => typeof k !== 'string' || !keys.includes(k))) throw new TypeError('Unknown P0 configuration field')
   for (const k of ['deploymentRoot', 'revision']) if (typeof input[k] !== 'string' || !input[k].trim() || input[k].includes('\0')) throw new TypeError(`Invalid ${k}`)
   const deploymentRoot = input.deploymentRoot as string
@@ -41,7 +50,17 @@ export function parseConfigP0(raw: unknown): ConfigP0 {
   if (sessionSourceBytes !== null && (typeof sessionSourceBytes !== 'number' || !Number.isSafeInteger(sessionSourceBytes) || sessionSourceBytes < 0)) throw new TypeError('Invalid sessionSourceBytes')
   const initializationTimeoutMs = input.initializationTimeoutMs === undefined ? 60_000 : input.initializationTimeoutMs
   if (typeof initializationTimeoutMs !== 'number' || !Number.isSafeInteger(initializationTimeoutMs) || initializationTimeoutMs < 1 || initializationTimeoutMs > 300_000) throw new TypeError('Invalid initializationTimeoutMs')
-  return Object.freeze({ deploymentRoot, revision: input.revision as string, ...values, nestedCheckoutRoots: Object.freeze(nestedCheckoutRoots), sessionSourceBytes, initializationTimeoutMs,
+  const rawCache = input.cache === undefined ? {} : input.cache
+  if (!rawCache || typeof rawCache !== 'object' || Array.isArray(rawCache)) throw new TypeError('Invalid cache')
+  const cacheInput = rawCache as Record<string, unknown>
+  if (Object.keys(cacheInput).some(key => !['enabled', 'maxEntries', 'maxBytes', 'lockTimeoutMs'].includes(key))) throw new TypeError('Invalid cache')
+  const enabled: unknown = cacheInput.enabled === undefined ? false : cacheInput.enabled
+  const maxEntries: unknown = cacheInput.maxEntries === undefined ? 10_000 : cacheInput.maxEntries
+  const maxBytes: unknown = cacheInput.maxBytes === undefined ? 268_435_456 : cacheInput.maxBytes
+  const lockTimeoutMs: unknown = cacheInput.lockTimeoutMs === undefined ? 250 : cacheInput.lockTimeoutMs
+  if (typeof enabled !== 'boolean' || typeof maxEntries !== 'number' || !Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 10_000 || typeof maxBytes !== 'number' || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 268_435_456 || typeof lockTimeoutMs !== 'number' || !Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 0) throw new TypeError('Invalid cache')
+  const cache: CacheConfigP0 = { enabled: enabled as boolean, maxEntries: maxEntries as number, maxBytes: maxBytes as number, lockTimeoutMs: lockTimeoutMs as number }
+  return Object.freeze({ deploymentRoot, revision: input.revision as string, ...values, nestedCheckoutRoots: Object.freeze(nestedCheckoutRoots), sessionSourceBytes, initializationTimeoutMs, cache: Object.freeze(cache),
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot as string }) })
 }
 export const ConfigP0Schema = { '~standard': { version: 1 as const, vendor: '@han_05/dsh-code-intelligence', validate(raw: unknown) {
@@ -57,7 +76,7 @@ export function translateP0(error: unknown, phase: 'initialization' | 'refresh' 
   }
   throw error
 }
-export type RuntimeP0 = { readonly index: BuiltIndexP0; readonly reader: VerifiedReaderP0; readonly config: SnapshotConfigP0 }
+export type RuntimeP0 = { readonly index: BuiltIndexP0; readonly reader: VerifiedReaderP0; readonly config: SnapshotConfigP0; readonly cache?: ContextCacheStoreApiV1 }
 export type RuntimeEventP0 = Readonly<{
   kind: 'build-started' | 'build-retried' | 'build-succeeded' | 'build-failed' | 'refresh-queued' | 'refresh-started' | 'operation-failed' | 'runtime-committed' | 'runtime-retired' | 'runtime-released' | 'session-closing' | 'session-closed'
   operationId?: number; phase?: 'initialization' | 'refresh'; sessionId?: string; queueDepth?: number; durationMs?: number; queueDurationMs?: number; reason?: string
@@ -144,9 +163,15 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         if (!(await stat(root)).isDirectory() || await realpath(workspace.path) !== root) return failureP0('access-denied', 'Session workspace does not match the registry.')
       } catch { return failureP0('access-denied', 'Session workspace cannot be verified.') }
       checkBuildControlP0(control)
-      const { sessionSourceBytes: _budget, initializationTimeoutMs: _timeout, ...snapshotConfig } = config
+      const { sessionSourceBytes: _budget, initializationTimeoutMs: _timeout, cache: _cache, ...snapshotConfig } = config
       let parsed: SnapshotConfigP0
-      try { parsed = parseSnapshotConfigP0({ ...snapshotConfig, workspaceRoot: root }) } catch { return failureP0('access-denied', 'Deployment root cannot be verified inside the Session workspace.') }
+      try {
+        const deploymentRoot = snapshotConfig.deploymentRoot === '.' ? '.' : snapshotConfig.deploymentRoot
+        parsed = parseSnapshotConfigP0({ ...snapshotConfig, deploymentRoot, workspaceRoot: root })
+      } catch (error) {
+        if (error instanceof P0ReadError || error instanceof P0BuildError) throw error
+        return failureP0('access-denied', 'Deployment root cannot be verified inside the Session workspace.')
+      }
       let index: BuiltIndexP0 | undefined
       let lastReadFailure: P0BuildError | undefined
       const build = hooks.buildIndex ?? buildIndexP0
@@ -165,9 +190,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       }
       if (!index) throw lastReadFailure ?? new P0BuildError('read-failed')
       const reader = await createVerifiedReaderP0(parsed.deploymentRoot)
+      const cache = config.cache.enabled
+        ? await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot, maxEntries: config.cache.maxEntries, maxBytes: config.cache.maxBytes, lockTimeoutMs: config.cache.lockTimeoutMs })
+        : undefined
       checkBuildControlP0(control)
-      if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
-      const runtime = Object.freeze({ index, reader, config: parsed })
+      if (state.status === 'closing' || state.status === 'closed' || disposed) { await cache?.close(); throw closed() }
+      const runtime = Object.freeze({ index, reader, config: parsed, ...(cache === undefined ? {} : { cache }) })
       emit({ kind: 'build-succeeded', ...eventBase, durationMs: Date.now() - startedAt, snapshotId: index.snapshot.snapshotId, indexFingerprint: index.indexFingerprint,
         extraction: extractionSummary(index), scanCoverage: index.scanCoverage })
       return runtime
@@ -181,6 +209,10 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       emit({ kind: 'build-failed', ...eventBase, durationMs: Date.now() - startedAt, reason: failureReason(translated) })
       throw translated
     } finally { clearTimeout(timer) }
+  }
+
+  async function closeRuntime(runtime: RuntimeP0): Promise<void> {
+    await runtime.cache?.close()
   }
 
   function commit(session: Session, state: SessionState, candidate: RuntimeP0, signal: AbortSignal, operationId: number, phase: 'initialization' | 'refresh'): void {
@@ -199,6 +231,7 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       if (![...state.calls].some(call => call.runtime === old)) {
         state.retired.delete(old)
         invoke(hooks.onRuntimeReleased && (() => hooks.onRuntimeReleased!(old)))
+        void closeRuntime(old)
         emit({ kind: 'runtime-released', operationId, phase, sessionId: sessionId(session), snapshotId: old.index.snapshot.snapshotId, indexFingerprint: old.index.indexFingerprint })
       }
     }
@@ -207,6 +240,7 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     if (state.retired.has(runtime) && ![...state.calls].some(call => call.runtime === runtime)) {
       state.retired.delete(runtime)
       invoke(hooks.onRuntimeReleased && (() => hooks.onRuntimeReleased!(runtime)))
+      void closeRuntime(runtime)
       emit({ kind: 'runtime-released', sessionId: sessionId(session), snapshotId: runtime.index.snapshot.snapshotId, indexFingerprint: runtime.index.indexFingerprint })
     }
   }
@@ -219,7 +253,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     const operationId = queuedOperationId ?? state.nextOperationId++
     const task = buildCandidate(session, state, AbortSignal.any([operationSignal, waitController.signal]), phase, operationId).then(async candidate => {
       await hooks.beforeCommit?.(phase, candidate)
-      commit(session, state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]), operationId, phase)
+      try {
+        commit(session, state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]), operationId, phase)
+      } catch (error) {
+        await closeRuntime(candidate)
+        throw error
+      }
       return candidate
     }).catch(error => {
       if (state.status === 'initializing') state.status = 'idle'
@@ -256,7 +295,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         : await startInitial(session, state, taskSignal, 'refresh', operationId)
       if (before) {
         await hooks.beforeCommit?.('refresh', candidate)
-        commit(session, state, candidate, taskSignal, operationId, 'refresh')
+        try {
+          commit(session, state, candidate, taskSignal, operationId, 'refresh')
+        } catch (error) {
+          await closeRuntime(candidate)
+          throw error
+        }
       }
       return refreshResultP0(candidate.index, before?.index.snapshot.snapshotId)
     }
@@ -278,8 +322,10 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       try { await state.initial } catch { /* candidate construction owns its cleanup */ }
       await state.refreshTail
       await Promise.all([...state.calls].map(call => call.done))
+      const active = state.runtime
       state.runtime = undefined
       state.retired.clear()
+      if (active) await closeRuntime(active)
       state.status = 'closed'
       retained.delete(state)
       emit({ kind: 'session-closed', sessionId: state.sessionId })

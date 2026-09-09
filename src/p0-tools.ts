@@ -2,6 +2,8 @@ import { defineTool, type ParameterSchemaSpec, type ToolDefinition } from '@deep
 import { SYMBOL_KINDS_P0, RELATION_TYPES_P0, OUTPUT_POLICY_P0 as O, parseRepoMapRequestP0, parseSymbolQueryRequestP0, parseRelationQueryRequestP0, parseExpandSourceRequestP0, parseRefreshSnapshotRequestP0 } from '@han_05/dsh-context'
 import { repoMapP0, symbolQueryP0, relationQueryP0, requestP0, outputBytesP0, outputBudgetP0 } from './p0-query.js'
 import { expandSourceP0 } from './p0-source.js'
+import { cachedP0Query, readExplicitP0Block, type P0QueryKind } from './p0-cache.js'
+import { failureP0 } from './p0-query.js'
 import { translateP0, type ResolverP0 } from './p0-runtime.js'
 
 const snapshot = { type: 'string' as const, description: 'snapshotId returned by context_repo_map; required except for repo map discovery.' }
@@ -9,7 +11,7 @@ const page = {
   limit: { type: 'integer' as const, description: '1–50, default 20. Forbidden for path/symbolId direct lookup.' },
   cursor: { type: 'string' as const, description: 'At most 1024 UTF-8 bytes; keep query and limit unchanged for continuation.' },
 }
-const scope = 'M3: explicit full refresh with immutable runtime leases and no cache. Refresh does not modify workspace source. Native transport required; PTC structured failures unsupported. '
+const scope = 'M4: optional cache with immutable runtime leases. Refresh does not modify workspace source and is never cached. Native transport required; PTC structured failures unsupported. '
 const coverage = 'AST coverage: TS/JS named declarations (including non-exported/nested), variable/destructured bindings and named class/interface/enum members; no parameter/type-parameter or synthetic anonymous symbols. Complete means this coverage only, not language semantics. '
 const definitions: readonly { name: string; description: string; parameters: ParameterSchemaSpec; parse: (raw: unknown) => unknown }[] = [
   { name: 'context_refresh_snapshot', description: scope + 'Queue a bounded full rebuild for this Session. The candidate commits atomically only after verification; failed or canceled refresh keeps the prior runtime. Queries already in flight may finish on their captured snapshot; new queries use the committed snapshot. Refresh does not reset the Session source budget.', parameters: {}, parse: parseRefreshSnapshotRequestP0 },
@@ -19,18 +21,31 @@ const definitions: readonly { name: string; description: string; parameters: Par
     parameters: { snapshotId: { ...snapshot, required: true }, name: { type: 'string' }, mode: { type: 'string', enum: ['exact', 'prefix', 'fuzzy'] }, kind: { type: 'string', enum: SYMBOL_KINDS_P0 }, pathPrefix: { type: 'string', description: 'Empty/omitted means repository; optional trailing slash canonicalized.' }, symbolId: { type: 'string' }, ...page }, parse: parseSymbolQueryRequestP0 },
   { name: 'context_relation_query', description: scope + 'Positive forward summary edges only: from.symbolId yields syntactic contains; from.path yields static top-level imports/exports and heuristic file-level calls names. Not resolved dependencies, callers/callees, or a call graph. No dynamic import/require/import-equals/export=/CommonJS edges, new/tagged/element-access calls or local module imports/exports. Type-only edges do not imply runtime dependencies. types defaults to all four, [] matches none; valid filters with no edges succeed and retain extraction status.',
     parameters: { snapshotId: { ...snapshot, required: true }, from: { type: 'object', additionalProperties: false, required: true, properties: { symbolId: { type: 'string' }, path: { type: 'string' } }, description: 'Exactly one of symbolId or canonical receipt path.' }, types: { type: 'array', items: { type: 'string', enum: RELATION_TYPES_P0 } }, ...page }, parse: parseRelationQueryRequestP0 },
-  { name: 'context_expand_source', description: scope + 'Read verified source directly using snapshotId/path/sourceHash from a receipt; no prior projection authorization. Choose exactly one explicit offsetRange (UTF-16 half-open, empty allowed), lineRange (1-based inclusive including terminator), or wholeFile:true. paddingLines 0–20 per side (default 0) only for ranges. No split surrogate pairs or silent range clipping except padding at file boundaries. Overlap/retries allowed and charged. Final JSON ≤65536 bytes; Session agents share 262144-byte default budget. Over-budget returns no partial source. Explicit blockId fails cache-unavailable until optional M4 cache support.',
+  { name: 'context_expand_source', description: scope + 'Read verified source directly using snapshotId/path/sourceHash from a receipt; no prior projection authorization. Choose exactly one explicit offsetRange (UTF-16 half-open, empty allowed), lineRange (1-based inclusive including terminator), or wholeFile:true. paddingLines 0–20 per side (default 0) only for ranges. No split surrogate pairs or silent range clipping except padding at file boundaries. Overlap/retries allowed and charged. Final JSON ≤65536 bytes; Session agents share 262144-byte default budget. Over-budget returns no partial source. Explicit blockId is validated against cache boundaries: missing/corrupt is not-found, stale snapshot/index/path/hash is stale-block, and unavailable storage is cache-unavailable.',
     parameters: { snapshotId: { ...snapshot, required: true }, path: { type: 'string', required: true }, sourceHash: { type: 'string', required: true }, blockId: { type: 'string' },
       offsetRange: { type: 'object', additionalProperties: false, properties: { startOffset: { type: 'integer', required: true }, endOffset: { type: 'integer', required: true } } },
       lineRange: { type: 'object', additionalProperties: false, properties: { startLine: { type: 'integer', required: true }, endLine: { type: 'integer', required: true } } }, wholeFile: { type: 'boolean', const: true }, paddingLines: { type: 'integer' } }, parse: parseExpandSourceRequestP0 },
 ]
+async function expandSourceWithOptionalBlock(runtime: Awaited<ReturnType<ResolverP0['resolve']>>['runtime'], raw: unknown, signal: AbortSignal) {
+  const parsed = parseExpandSourceRequestP0(raw)
+  if (parsed.blockId !== undefined) {
+    const status = await readExplicitP0Block(runtime, parsed.blockId, parsed.path, parsed.sourceHash)
+    if (status.status === 'not-found') failureP0('not-found', 'The referenced context block is missing or corrupt.')
+    if (status.status === 'stale-block') failureP0('stale-block', 'The referenced context block does not match the current snapshot or index.')
+    if (status.status === 'cache-unavailable') failureP0('cache-unavailable', 'The cache is unavailable; omit blockId and use direct source verification.')
+  }
+  const { blockId: _blockId, ...directRequest } = parsed
+  const result = await expandSourceP0(runtime.index, runtime.reader, directRequest, { signal }, runtime.config.nestedCheckoutRoots)
+  return parsed.blockId === undefined ? result : { ...result, blockId: parsed.blockId }
+}
+
 export function createToolsP0(resolver: ResolverP0): readonly ToolDefinition[] {
   return Object.freeze(definitions.map(definition => defineTool({
     name: definition.name, description: definition.description, parameters: definition.parameters,
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     async execute(raw, exec) {
       // Validate before initializing a workspace. Shared parser owns all defaults/combinations.
-      requestP0(definition.parse, raw)
+      const parsed = requestP0(definition.parse, raw)
       if (definition.name === 'context_refresh_snapshot') {
         if (!resolver.refresh) throw new Error('refresh resolver is unavailable')
         const value = await resolver.refresh(exec.agent?.session, exec.signal)
@@ -40,10 +55,16 @@ export function createToolsP0(resolver: ResolverP0): readonly ToolDefinition[] {
       const { runtime, budget, signal, done } = await resolver.resolve(exec.agent?.session, exec.signal)
       try {
         signal.throwIfAborted()
-        const value = definition.name === 'context_repo_map' ? repoMapP0(runtime.index, raw)
-          : definition.name === 'context_symbol_query' ? symbolQueryP0(runtime.index, raw)
-          : definition.name === 'context_relation_query' ? relationQueryP0(runtime.index, raw)
-          : await expandSourceP0(runtime.index, runtime.reader, raw, { signal }, runtime.config.nestedCheckoutRoots)
+        const queryKind: P0QueryKind | undefined = definition.name === 'context_repo_map' ? 'repo-map'
+          : definition.name === 'context_symbol_query' ? 'symbol-query'
+          : definition.name === 'context_relation_query' ? 'relation-query' : undefined
+        const value = queryKind === 'repo-map'
+          ? await cachedP0Query(runtime, runtime.config.deploymentRoot, queryKind, parsed, () => repoMapP0(runtime.index, parsed))
+          : queryKind === 'symbol-query'
+            ? await cachedP0Query(runtime, runtime.config.deploymentRoot, queryKind, parsed, () => symbolQueryP0(runtime.index, parsed))
+            : queryKind === 'relation-query'
+              ? await cachedP0Query(runtime, runtime.config.deploymentRoot, queryKind, parsed, () => relationQueryP0(runtime.index, parsed))
+              : await expandSourceWithOptionalBlock(runtime, parsed, signal)
         // Exactly the JSON rendered by this adapter, not text length or host framing.
         const bytes = outputBytesP0(value)
         if (bytes > O.maxOutputBytes) return outputBudgetP0(bytes)

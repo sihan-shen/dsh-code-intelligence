@@ -10,7 +10,7 @@ import {
   type RepoMapPageV1,
   type SymbolQueryResultV1,
 } from '@han_05/dsh-context'
-import type { CacheBoundaryV1, CacheLookupKeyV1, ContextCacheStoreApiV1 } from '@han_05/dsh-context-cache'
+import type { CacheBoundaryV1, CacheLookupKeyV1, ContextCacheStoreApiV1, CacheBlockReadV1, CacheLookupReadV1, CacheWriteResultV1 } from '@han_05/dsh-context-cache'
 import { buildRepoMap, querySymbols, type RepoMapOptionsV1, type SymbolQueryV1 } from './projections.js'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
@@ -147,6 +147,7 @@ function pageBlock(
     adapterId: boundary.adapterId,
     adapterVersion: boundary.adapterVersion,
     compilerPolicyVersion: boundary.compilerPolicyVersion,
+    ...(boundary.indexFingerprint === undefined ? {} : { indexFingerprint: boundary.indexFingerprint }),
     sources,
     text,
     truncated: false,
@@ -192,6 +193,11 @@ function projectionDependencies(snapshot: RepositorySnapshotStore['snapshot']): 
   return [...snapshot.files].map(file => file.contentHash).sort()
 }
 
+function sourceBoundary(boundary: CacheBoundaryV1): CacheBoundaryV1 {
+  const { indexFingerprint: _indexFingerprint, ...withoutIndex } = boundary
+  return withoutIndex
+}
+
 function projectionSources(snapshot: RepositorySnapshotStore['snapshot']): readonly { path: string; contentHash: string }[] {
   return snapshot.files.map(file => ({ path: file.path, contentHash: file.contentHash }))
 }
@@ -224,6 +230,7 @@ function validateProjectionBlock(
     || block.adapterId !== boundary.adapterId
     || block.adapterVersion !== boundary.adapterVersion
     || block.compilerPolicyVersion !== boundary.compilerPolicyVersion
+    || block.indexFingerprint !== boundary.indexFingerprint
   ) throw new TypeError('cached context block provenance does not match the current boundary')
   const currentSources = projectionSources(snapshot)
   if (!sameSources(block.sources, currentSources)) throw new TypeError('cached context block sources do not match the current snapshot')
@@ -255,6 +262,7 @@ function makeBoundary(
   index: InternalSymbolIndexStore,
   compilerPolicyVersion: string,
   capabilityVersion: string,
+  indexFingerprint?: string,
 ): CacheBoundaryV1 {
   return {
     workspaceFingerprint: snapshot.workspaceFingerprint,
@@ -263,14 +271,17 @@ function makeBoundary(
     adapterVersion: index.adapterVersion,
     compilerPolicyVersion,
     capabilityVersion,
+    ...(indexFingerprint === undefined ? {} : { indexFingerprint }),
   }
 }
 
 export function createContextCompiler(options: ContextCompilerOptions): ContextCompilerHandle {
-  const { workspaceRoot, store, index, cache } = options
+  const { workspaceRoot, store, index } = options
+  const cache = options.cache
   const compilerPolicyVersion = options.compilerPolicyVersion ?? CONTEXT_COMPILER_POLICY_VERSION
   const capabilityVersion = options.capabilityVersion ?? CONTEXT_CAPABILITY_VERSION
   const sessions = new Map<string, SessionState>()
+  const knownBlocks = new Map<string, ContextBlockV1>()
   const queues = new Map<string, Promise<void>>()
   let cacheHits = 0
   let cacheMisses = 0
@@ -281,7 +292,13 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
   }
 
   function currentBoundary(): CacheBoundaryV1 {
-    return makeBoundary(store.snapshot, index, compilerPolicyVersion, capabilityVersion)
+    return makeBoundary(store.snapshot, index, compilerPolicyVersion, capabilityVersion, options.indexFingerprint)
+  }
+
+  function boundaryWithIndexFingerprint(boundary: CacheBoundaryV1): CacheBoundaryV1 {
+    return boundary.indexFingerprint === undefined && options.indexFingerprint !== undefined
+      ? { ...boundary, indexFingerprint: options.indexFingerprint }
+      : boundary
   }
 
   function queueKey(sessionKey: string | undefined): string {
@@ -308,28 +325,68 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
   ): Promise<ContextBlockV1> {
     checkOpen()
     aborted(signal)
-    const blockIds = await cache.getLookup(key)
+    if (cache === undefined) {
+      const block = parseContextBlockV1(await compute())
+      knownBlocks.set(block.blockId, block)
+      return block
+    }
+    let lookup: CacheLookupReadV1
+    try {
+      lookup = cache.readLookup === undefined
+        ? { status: 'hit', blockIds: (await cache.getLookup(key)) ?? [] }
+        : await cache.readLookup(key)
+    } catch {
+      lookup = { status: 'unavailable', reason: 'storage-error' }
+    }
     checkOpen()
     aborted(signal)
+    const blockIds = lookup.status === 'hit' ? lookup.blockIds : undefined
     if (blockIds?.length === 1) {
-      const block = await cache.getBlock(blockIds[0]!, boundary)
+      let read: CacheBlockReadV1
+      try {
+        read = cache.readBlock === undefined
+          ? { status: 'hit', block: (await cache.getBlock(blockIds[0]!, boundary))! }
+          : await cache.readBlock(blockIds[0]!, boundary)
+      } catch {
+        read = { status: 'unavailable', reason: 'storage-error' }
+      }
+      const block = read.status === 'hit' ? read.block : undefined
       checkOpen()
       aborted(signal)
       if (block !== undefined) {
-        validateProjectionBlock(parseContextBlockV1(block), kind, boundary, store.snapshot)
+        const parsed = parseContextBlockV1(block)
+        validateProjectionBlock(parsed, kind, boundary, store.snapshot)
         cacheHits += 1
-        return parseContextBlockV1(block)
+        knownBlocks.set(parsed.blockId, parsed)
+        return parsed
       }
     }
     cacheMisses += 1
     const block = parseContextBlockV1(await compute())
+    knownBlocks.set(block.blockId, block)
     checkOpen()
     aborted(signal)
-    await cache.putBlock(block, boundary)
+    let putBlock: CacheWriteResultV1
+    try {
+      putBlock = cache.putBlockConfirmed === undefined
+        ? (await cache.putBlock(block, boundary), { status: 'confirmed' as const })
+        : await cache.putBlockConfirmed(block, boundary)
+    } catch {
+      putBlock = { status: 'unavailable' }
+    }
     checkOpen()
     aborted(signal)
-    await cache.putLookup(key, [block.blockId])
+    if (putBlock.status !== 'confirmed') return block
+    let putLookup: CacheWriteResultV1
+    try {
+      putLookup = cache.putLookupConfirmed === undefined
+        ? (await cache.putLookup(key, [block.blockId]), { status: 'confirmed' as const })
+        : await cache.putLookupConfirmed(key, [block.blockId])
+    } catch {
+      putLookup = { status: 'unavailable' }
+    }
     checkOpen()
+    if (putLookup.status !== 'confirmed') return block
     aborted(signal)
     return block
   }
@@ -338,7 +395,7 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
     checkOpen()
     aborted(signal)
     const request = repoMapRequest(value, store.snapshot)
-    const boundary = currentBoundary()
+    const boundary = boundaryWithIndexFingerprint(currentBoundary())
     const dependencies = projectionDependencies(store.snapshot)
     const block = await cached(
       projectionLookupKey('repo-map', request.options, boundary, dependencies),
@@ -354,7 +411,7 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
     checkOpen()
     aborted(signal)
     const request = symbolQueryRequest(value, store.snapshot)
-    const boundary = currentBoundary()
+    const boundary = boundaryWithIndexFingerprint(currentBoundary())
     const dependencies = projectionDependencies(store.snapshot)
     const block = await cached(
       projectionLookupKey('symbol', request.options, boundary, dependencies),
@@ -371,7 +428,14 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
     aborted(signal)
     const request = expansionRequest(value)
     const boundary = currentBoundary()
-    const base = await cache.getBlock(request.blockId, boundary)
+    const sourceCacheBoundary = sourceBoundary(boundary)
+    if (cache === undefined) throw new TypeError('cache unavailable while validating source block')
+    let baseRead: CacheBlockReadV1
+    try { baseRead = cache.readBlock === undefined
+      ? { status: 'hit', block: (await cache.getBlock(request.blockId, boundary))! }
+      : await cache.readBlock(request.blockId, boundary) } catch { baseRead = { status: 'unavailable', reason: 'storage-error' } }
+    if (baseRead.status === 'unavailable') throw new TypeError('cache unavailable while validating source block')
+    const base = baseRead.status === 'hit' ? baseRead.block : undefined
     checkOpen()
     aborted(signal)
     if (base === undefined) throw new TypeError('source expansion requires a prior cached projection block')
@@ -393,18 +457,23 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
       checkOpen()
       aborted(signal)
       if (hasUnpairedSurrogate(measurement.text)) throw new TypeError('source window must end on UTF-16 code-point boundaries')
-      const block = sourceBlock(workspaceRoot, measurement, boundary)
+      const block = sourceBlock(workspaceRoot, measurement, sourceCacheBoundary)
       if (state.usedBytes + block.byteLength > MAX_CONTEXT_SESSION_BYTES) throw new RangeError('source expansion exceeds the session byte budget')
       checkOpen()
       aborted(signal)
-      const cachedBlock = await cache.getBlock(block.blockId, boundary)
+      let cachedRead: CacheBlockReadV1 | undefined
+      try { cachedRead = cache === undefined || cache.readBlock === undefined ? undefined : await cache.readBlock(block.blockId, sourceCacheBoundary) } catch { cachedRead = { status: 'unavailable', reason: 'storage-error' } }
+      const cachedBlock = cache === undefined ? undefined : cache.readBlock === undefined ? await cache.getBlock(block.blockId, sourceCacheBoundary) : cachedRead?.status === 'hit' ? cachedRead.block : undefined
       checkOpen()
       aborted(signal)
       if (cachedBlock !== undefined) {
         cacheHits += 1
       } else {
         cacheMisses += 1
-        await cache.putBlock(block, boundary)
+        try {
+          if (cache !== undefined && cache.putBlockConfirmed === undefined) await cache.putBlock(block, sourceCacheBoundary)
+          else if (cache?.putBlockConfirmed !== undefined) await cache.putBlockConfirmed(block, sourceCacheBoundary)
+        } catch { /* source correctness does not depend on cache persistence */ }
         checkOpen()
         aborted(signal)
       }
@@ -422,7 +491,8 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
     get stats(): ContextCompilerStats { return { hits: cacheHits, misses: cacheMisses } },
     async dispose(): Promise<void> {
       disposed = true
-      await cache.close()
+      knownBlocks.clear()
+      await cache?.close()
     },
   }
   return Object.freeze(compiler)

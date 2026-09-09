@@ -31,6 +31,8 @@ export async function expandSourceP0(index: BuiltIndexP0, reader: VerifiedReader
   if (excludedPathP0(request.path, nestedRoots)) failureP0('access-denied', 'Path is excluded by workspace policy.')
   const receipt = receiptP0(index, request.path)
   if (receipt.contentHash !== request.sourceHash) failureP0('stale-source', 'Receipt hash differs; reacquire the receipt after rebuilding the Session.', { reason: 'receipt-hash-mismatch' })
+  // Explicit block validation is performed by the cache-backed context compiler.
+  // The no-cache P0 runtime has no way to distinguish missing, stale, and unavailable.
   if (request.blockId !== undefined) failureP0('cache-unavailable', 'Optional cache is unavailable; omit blockId and use the direct source request.')
   const file = await reader({ ...control, path: request.path, expectedHash: receipt.contentHash, maxBytes: receipt.byteLength })
   checkBuildControlP0(control)
