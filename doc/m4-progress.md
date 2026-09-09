@@ -27,4 +27,4 @@
 
 - 下游 V1 compiler consumers 尚未迁移；不宣称 M5、发布、真实仓 gold 或性能收益。
 - Web card intentionally uses a native accessible checkbox because the locked rc.1 primitives surface does not export `Switch`; no alpha package or copied component is used。
-- 根 lockfile 的普通安装会产生超出当前 importer 的 peer snapshot churn，本任务严格未运行 pnpm，也未把这类 churn 作为交付内容；根 lockfile 仍由主线程在不扩大 diff 的条件下单独处理。
+- 根 lockfile 由主线程使用 filtered `pnpm install --lockfile-only --filter @han_05/dsh-code-intelligence...` 生成并在父仓独立分支提交；pnpm 因将共享 `dsh-settings` 从旧的 `0.1.1-rc.2` 对齐到当前 `0.1.2-rc.1`，同步更新了受该 peer 影响的既有 snapshot keys。没有混入 `0.1.3-alpha.2`。
