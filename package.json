@@ -52,11 +52,7 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
-      "platform": "web",
-      "external": [
-        "@deepseek-ai/dsh-client-ui-settings/client",
-        "@deepseek-ai/dsh-client-locale/client"
-      ]
+      "platform": "web"
     }
   },
   "dependencies": {
