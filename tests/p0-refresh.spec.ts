@@ -9,6 +9,7 @@ import { createResolverP0 } from '../src/p0-runtime.ts'
 import { repoMapP0, symbolQueryP0 } from '../src/p0-query.ts'
 
 const cleanup: Array<() => unknown> = []
+let sequence = 0
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose() })
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'm3-refresh-'))
@@ -16,7 +17,7 @@ async function fixture() {
   await writeFile(join(root, 'main.ts'), 'export const before = 1\n')
   const ctx = new Context(), sessions = await ctx.plugin(SessionStore)
   cleanup.push(() => sessions.dispose())
-  return { root, session: ctx.sessions.prepare(SessionId(`m3-${Math.random()}`), { meta: { cwd: root } }) }
+  return { root, session: ctx.sessions.prepare(SessionId(`m3-${++sequence}`), { meta: { cwd: root } }) }
 }
 function registry(root: string) { return { async resolveByPath(path: string) { return path === root ? { path } : undefined } } }
 
@@ -69,6 +70,33 @@ it('refresh failure preserves the active runtime and a later queued refresh can 
   await rm(join(root, 'extra.ts'))
   const refreshed = await resolver.refresh!(session, new AbortController().signal)
   expect(refreshed.changed).toBe(false)
+  await resolver.release(session)
+})
+
+it('queues a refresh arriving during initialization and collects it after the initial candidate', async () => {
+  const { root, session } = await fixture()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let entered!: () => void
+  const firstEntered = new Promise<void>(resolve => { entered = resolve })
+  let lookups = 0
+  const resolver = createResolverP0({ deploymentRoot: '.', revision: 'm3' }, { async resolveByPath(path: string) {
+    if (path !== root) return undefined
+    if (++lookups === 1) { entered(); await gate }
+    return { path }
+  } })
+  const query = resolver.resolve(session, new AbortController().signal)
+  await firstEntered
+  await writeFile(join(root, 'main.ts'), 'export const queued = 4\n')
+  const refresh = resolver.refresh!(session, new AbortController().signal)
+  release()
+  await query.then(handle => handle.done())
+  const result = await refresh
+  expect(result.changed).toBe(false)
+  expect(lookups).toBe(2)
+  const current = await resolver.resolve(session, new AbortController().signal)
+  expect(symbolQueryP0(current.runtime.index, { snapshotId: result.snapshotId, name: 'queued' }).matches).toHaveLength(1)
+  current.done()
   await resolver.release(session)
 })
 

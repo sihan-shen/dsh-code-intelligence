@@ -35,4 +35,4 @@ node node_modules/vitest/vitest.mjs run
 node node_modules/tsdown/dist/run.mjs --out-dir lib --external typescript
 ```
 
-当前全量结果：20 个测试文件、209 个测试通过（M2 基线 205 + M3 refresh 4）。构建成功。尚未运行/记录独立真实仓 gold/edit-refresh runner；这属于 M5 范围。尚未接入 M4 cache、watcher、增量刷新、跨快照 locator、LSP 或下游迁移。
+当前全量结果：21 个测试文件、210 个测试通过（M2 基线 205 + M3 refresh 5）。构建成功。尚未运行/记录独立真实仓 gold/edit-refresh runner；这属于 M5 范围。尚未接入 M4 cache、watcher、增量刷新、跨快照 locator、LSP 或下游迁移。
