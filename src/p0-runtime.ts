@@ -152,6 +152,7 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     emit({ kind: 'build-started', ...eventBase })
     const control = { signal, deadlineMs }
     const timer = setTimeout(() => controller.abort(initializationTimeout()), config.initializationTimeoutMs)
+    let cache: ContextCacheStoreApiV1 | undefined
     try {
       const cwd = session.header.cwd
       if (!cwd) return failureP0('access-denied', 'A registered Session workspace is required.')
@@ -190,7 +191,6 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       }
       if (!index) throw lastReadFailure ?? new P0BuildError('read-failed')
       const reader = await createVerifiedReaderP0(parsed.deploymentRoot)
-      let cache: ContextCacheStoreApiV1 | undefined
       if (config.cache.enabled) {
         try {
           cache = await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot, maxEntries: config.cache.maxEntries, maxBytes: config.cache.maxBytes, lockTimeoutMs: config.cache.lockTimeoutMs })
@@ -200,12 +200,16 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         }
       }
       checkBuildControlP0(control)
-      if (state.status === 'closing' || state.status === 'closed' || disposed) { await cache?.close(); throw closed() }
+      if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
       const runtime = Object.freeze({ index, reader, config: parsed, ...(cache === undefined ? {} : { cache }) })
       emit({ kind: 'build-succeeded', ...eventBase, durationMs: Date.now() - startedAt, snapshotId: index.snapshot.snapshotId, indexFingerprint: index.indexFingerprint,
         extraction: extractionSummary(index), scanCoverage: index.scanCoverage })
       return runtime
     } catch (error) {
+      // Cache is an optimization owned by the candidate. Any failure after it
+      // opens (including cancellation at the commit checkpoint) must close it
+      // before the rejected candidate can be retried or discarded.
+      await cache?.close().catch(() => {})
       let translated: unknown = error
       try {
         signal.throwIfAborted()

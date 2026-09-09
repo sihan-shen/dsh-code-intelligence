@@ -21,11 +21,19 @@ type CodeIntelligenceLocaleKey =
   | 'title' | 'description' | 'enabled' | 'maxEntries' | 'maxBytes' | 'lockTimeoutMs'
   | 'restartNotice' | 'save' | 'discard' | 'reset' | 'saving' | 'invalid' | 'unsaved' | 'saveFailed'
 
-type Draft = {
+export type CodeIntelligenceDraft = {
   enabled: boolean
   maxEntries: string
   maxBytes: string
   lockTimeoutMs: string
+}
+
+type Draft = CodeIntelligenceDraft
+
+type CodeIntelligenceMutation = {
+  readonly op: 'set' | 'unset'
+  readonly path: readonly string[]
+  readonly value?: unknown
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -84,11 +92,50 @@ function baseDraftOf(scope: SettingsScope<CodeIntelligenceSettings>): Draft {
   }
 }
 
-function integer(value: string, minimum: number, maximum?: number): number | undefined {
+export function parseCodeIntelligenceInteger(value: string, minimum: number, maximum?: number): number | undefined {
   if (!/^\d+$/u.test(value)) return undefined
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed < minimum || (maximum !== undefined && parsed > maximum)) return undefined
   return parsed
+}
+
+export function codeIntelligenceValues(draft: CodeIntelligenceDraft): {
+  readonly maxEntries: number | undefined
+  readonly maxBytes: number | undefined
+  readonly lockTimeoutMs: number | undefined
+} {
+  return {
+    maxEntries: parseCodeIntelligenceInteger(draft.maxEntries, 1, 10_000),
+    maxBytes: parseCodeIntelligenceInteger(draft.maxBytes, 1, 268_435_456),
+    lockTimeoutMs: parseCodeIntelligenceInteger(draft.lockTimeoutMs, 0),
+  }
+}
+
+export function codeIntelligenceDraftValid(draft: CodeIntelligenceDraft): boolean {
+  const values = codeIntelligenceValues(draft)
+  return values.maxEntries !== undefined && values.maxBytes !== undefined && values.lockTimeoutMs !== undefined
+}
+
+export function codeIntelligenceMutations(draft: CodeIntelligenceDraft, base?: CodeIntelligenceDraft): readonly CodeIntelligenceMutation[] {
+  const values = codeIntelligenceValues(draft)
+  if (values.maxEntries === undefined || values.maxBytes === undefined || values.lockTimeoutMs === undefined) return []
+  const baseValues = base === undefined ? undefined : codeIntelligenceValues(base)
+  const fields: readonly [keyof CodeIntelligenceDraft, unknown, unknown][] = [
+    ['enabled', draft.enabled, base?.enabled],
+    ['maxEntries', values.maxEntries, baseValues?.maxEntries],
+    ['maxBytes', values.maxBytes, baseValues?.maxBytes],
+    ['lockTimeoutMs', values.lockTimeoutMs, baseValues?.lockTimeoutMs],
+  ]
+  return fields.map(([field, value, baseValue]) => ({
+    op: base !== undefined && value === baseValue ? 'unset' as const : 'set' as const,
+    path: ['cache', field],
+    ...(base !== undefined && value === baseValue ? {} : { value }),
+  }))
+}
+
+export function codeIntelligenceSavePlan(draft: CodeIntelligenceDraft, base: CodeIntelligenceDraft, revision: number | undefined): { readonly mutations: readonly CodeIntelligenceMutation[]; readonly revision: number | undefined } | undefined {
+  if (!codeIntelligenceDraftValid(draft)) return undefined
+  return { mutations: codeIntelligenceMutations(draft, base), revision }
 }
 
 function CodeIntelligenceCard(props: PropsRuntime<'settings.plugin.item'> & PropsLocale<typeof LOCALE_NS> & { scope: SettingsScope<CodeIntelligenceSettings> }) {
@@ -118,28 +165,16 @@ function CodeIntelligenceCard(props: PropsRuntime<'settings.plugin.item'> & Prop
     setDirty(true)
     setFailed(false)
   }
-  const values = {
-    maxEntries: integer(draft.maxEntries, 1, 10_000),
-    maxBytes: integer(draft.maxBytes, 1, 268_435_456),
-    lockTimeoutMs: integer(draft.lockTimeoutMs, 0),
-  }
-  const valid = values.maxEntries !== undefined && values.maxBytes !== undefined && values.lockTimeoutMs !== undefined
+  const valid = codeIntelligenceDraftValid(draft)
 
   const save = async () => {
     if (!dirty || !valid || saving) return
-    const maxEntries = values.maxEntries
-    const maxBytes = values.maxBytes
-    const lockTimeoutMs = values.lockTimeoutMs
-    if (maxEntries === undefined || maxBytes === undefined || lockTimeoutMs === undefined) return
     setSaving(true)
     setFailed(false)
     try {
-      await scope.mutate([
-        { op: 'set', path: ['cache', 'enabled'], value: draft.enabled },
-        { op: 'set', path: ['cache', 'maxEntries'], value: maxEntries },
-        { op: 'set', path: ['cache', 'maxBytes'], value: maxBytes },
-        { op: 'set', path: ['cache', 'lockTimeoutMs'], value: lockTimeoutMs },
-      ], revision)
+      const plan = codeIntelligenceSavePlan(draft, baseDraftOf(scope), revision)
+      if (plan === undefined) return
+      await scope.mutate(plan.mutations, plan.revision)
       const accepted = draftOf(scope)
       if (JSON.stringify(accepted) !== JSON.stringify(draft)) setFailed(true)
       else {
