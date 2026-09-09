@@ -129,25 +129,33 @@ export const apply = async (
 ): Promise<void> => {
   if (typeof ctx.inject !== 'function') throw new TypeError('P0 default plugin requires Cordis and a registered Session workspace; use V1 programmatic APIs explicitly for old consumers.')
 
-  // Settings are an optional Host service. Registering on the consumer fiber
-  // gives the namespace the consumer lifetime; sampling it once is deliberate:
-  // `applies: restart` must not hot-switch a live cache generation.
+  // Settings are an optional Host service. The official installSection seam
+  // owns registration, composition fallback, and owner-lifetime cleanup.
+  // We sample the active source once: `applies: restart` must not hot-switch a
+  // live cache generation after the workspace resolver has been created.
   let startupConfig: CodeIntelligenceConfig = { ...config, cache: config.cache ?? DEFAULT_CACHE }
   const settings = ctx.get?.('settings') as SettingsProvider | undefined
   if (settings !== undefined) {
-    const scope = settings.register(CODE_INTELLIGENCE_SETTINGS_NS, CodeIntelligenceSettingsSchema, {
-      base: { cache: startupConfig.cache ?? DEFAULT_CACHE },
-      applies: 'restart',
-      validate: value => {
-        const cache = value.cache ?? DEFAULT_CACHE
-        if (typeof cache.enabled !== 'boolean' || !Number.isSafeInteger(cache.maxEntries)
-          || !Number.isSafeInteger(cache.maxBytes) || !Number.isSafeInteger(cache.lockTimeoutMs)) {
-          throw new TypeError('code-intelligence cache settings are invalid')
-        }
+    settings.installSection(
+      ctx as Context,
+      CODE_INTELLIGENCE_SETTINGS_NS,
+      CodeIntelligenceSettingsSchema,
+      { cache: startupConfig.cache ?? DEFAULT_CACHE },
+      {
+        setSource: source => {
+          const resolved = source()
+          startupConfig = { ...config, cache: resolved.cache ?? DEFAULT_CACHE }
+        },
+        onChange: () => {},
+        validate: value => {
+          const cache = value.cache ?? DEFAULT_CACHE
+          if (typeof cache.enabled !== 'boolean' || !Number.isSafeInteger(cache.maxEntries)
+            || !Number.isSafeInteger(cache.maxBytes) || !Number.isSafeInteger(cache.lockTimeoutMs)) {
+            throw new TypeError('code-intelligence cache settings are invalid')
+          }
+        },
       },
-    })
-    const resolved = scope.get()
-    startupConfig = { ...config, cache: resolved.cache ?? DEFAULT_CACHE }
+    )
   }
   await new Promise<void>((resolve, reject) => {
     let state: 'starting' | 'active' | 'failed' | 'disposed' = 'starting'
