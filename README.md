@@ -4,12 +4,12 @@ Bounded repository facts and verified source reads for coding agents.
 
 ## Status and compatibility
 
-**This branch implements M2 (Q1–Q5), the no-cache P0 query/source milestone.**
+**This branch implements M3 (R1–R4), the no-cache P0 query/source/refresh milestone.**
 The planned milestone label is `0.3.0-alpha.2`; **`package.json` remains `0.2.1`**
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
 
-- Default bundle: four P0 tools, listed below. No V1 `contextCompiler` service,
+- Default bundle: five P0 tools, listed below. No V1 `contextCompiler` service,
   `code_*` aliases, cache opening/writes, or invented `blockId`.
 - Existing V1 programmatic APIs (`createContextCompiler`, `createContextTools`,
   `createCodeIntelligenceTools`, `mountCodeIntelligence`, V1 snapshot/query APIs)
@@ -45,7 +45,7 @@ structured failure contract**. This package neither changes host transport nor
 adds a per-tool Native override. Registry/Session projection/replay tests are
 not a full AgentLoop/provider or unchanged-profile acceptance test.
 
-## M2 tools
+## M3 tools
 
 | Tool | Behavior |
 | --- | --- |
@@ -53,6 +53,7 @@ not a full AgentLoop/provider or unchanged-profile acceptance test.
 | `context_symbol_query` | Explicit snapshot; nonblank name (≤256 UTF-8 bytes), exact by default, prefix or explicit fuzzy; kind and directory `pathPrefix` filters; exclusive direct `symbolId` lookup. |
 | `context_relation_query` | Explicit snapshot; `from.symbolId` produces contains, `from.path` produces imports/exports/calls. `types` is a set, defaults to all four, and `[]` matches none. |
 | `context_expand_source` | Direct snapshot/path/sourceHash verified read; exactly one explicit UTF-16 half-open `offsetRange`, inclusive 1-based `lineRange`, or `wholeFile: true`. No prior block needed. |
+| `context_refresh_snapshot` | Queue a bounded full rebuild for the live Session. Candidate construction is isolated and atomically committed; failure/cancellation keeps the active runtime. |
 
 Collection pages default to 20, allow 1–50, and return `truncated/nextCursor`.
 Cursor bindings include normalized query, snapshot, actual index fingerprint,
@@ -113,15 +114,18 @@ to squeeze into a budget. Host post-processing/transport cost is not measured.
   `new`, tagged-template or element-access call extraction. No reverse/semantic
   definition/reference/caller navigation. LSP adapter remains experimental and
   **is not invoked by the default runtime**. Host grep/read remain valid choices.
-- **M3 is not complete:** no `context_refresh_snapshot`, watcher, replacement
-  queue or retired-runtime leases. M2 holds one immutable runtime per Session;
-  initialization is shared, failure can be retried by a later call, and release
-  cancels work, waits for cleanup (including concurrent repeated release calls)
-  and prevents recreation of that Session. Initialization deadline checks and
-  timers both use the host `TOOL_TIMEOUT` channel; canceled calls preserve their
-  caller-owned reason rather than becoming business failures.
-  After edits, start a new Session to rebuild. Receipt queries intentionally keep
-  old facts; source reads reject changed/deleted files with `stale-source`.
+- **M3 lifecycle is implemented:** Session state is idle/initializing/active/closing/closed;
+  initialization is shared, refreshes are bounded and serialized, each refresh builds
+  its own candidate, and publication is atomic. Queries lease the captured immutable
+  runtime, so an older query may finish while a refresh commits; new queries use the
+  new snapshot and old snapshot/symbol handles are stale. Read races receive one fresh
+  full-build retry; failed/canceled refresh keeps the active runtime. Initialization
+  failure can be retried, one waiter can cancel without canceling the shared build,
+  and initialization-time refreshes do not reuse the initial candidate. Release waits
+  for queued work and leases, then permanently closes that Session. Refresh does not
+  reset the Session source budget. Cancellation/deadline remain cooperative; synchronous
+  TypeScript parsing cannot be hard-interrupted. `context_refresh_snapshot` is the
+  only refresh path; there is no watcher.
 - **M4 is not complete:** no P0 cache, block persistence, explicit stale/missing
   block classification, or migrated downstream compiler integration.
 - **M5 is not complete:** no fixed real-repository independent gold/edit-refresh
@@ -161,11 +165,12 @@ already does this. `expandSourceP0` prepares verified data without debiting a
 ledger; the default tool adapter owns final JSON accounting.
 
 Package-entry tests execute the built API, not just inspect exports. See
-[M2 task cards and actual validation results](doc/m2-progress.md) for test commands,
+[M3 progress and actual validation results](doc/m3-progress.md) for test commands,
+and [M2 task cards and validation history](doc/m2-progress.md) for the prior milestone,
 Native integration boundaries and the preserved M1/V1 regression evidence.
 The [independent M2 review](doc/m2-review.md) records three reproduced and fixed
 control-flow bugs, additional cursor/escaped-JSON/source-range checks, and the
 200-test full-suite result. A subsequent [main-thread review](doc/m2-review-round2.md)
 fixed the outer Native bridge also misclassifying caller-owned cancellation reasons,
 added registry/Unicode-endpoint/reentrant-close regressions, and passed **205 tests**.
-This does not certify M3–M5 or downstream migration.
+This does not certify M4–M5 or downstream migration.

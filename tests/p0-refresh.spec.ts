@@ -74,13 +74,14 @@ it('refresh failure preserves the active runtime and a later queued refresh can 
 
 it('cancels queued refresh before commit and closing prevents a late candidate from publishing', async () => {
   const { root, session } = await fixture()
-  const entered = new Promise<void>(resolve => { (globalThis as { entered?: () => void }).entered = resolve })
+  let signalEntered!: () => void
+  const entered = new Promise<void>(resolve => { signalEntered = resolve })
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   let builds = 0
   const resolver = createResolverP0({ deploymentRoot: '.', revision: 'm3' }, { async resolveByPath(path: string) {
     if (path !== root) return undefined
-    if (++builds === 2) { (globalThis as { entered?: () => void }).entered?.(); await gate }
+    if (++builds === 2) { signalEntered(); await gate }
     return { path }
   } })
   const first = await resolver.resolve(session, new AbortController().signal)
