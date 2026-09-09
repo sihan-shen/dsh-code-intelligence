@@ -13,10 +13,10 @@
   },
   "type": "module",
   "main": "./lib/index.js",
-  "types": "./lib/types/index.d.ts",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
+      "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -27,7 +27,8 @@
   },
   "files": [
     "lib/index.js",
-    "lib/types/**/*.d.ts",
+    "lib/index.d.ts",
+    "lib/index.d.ts.map",
     "lib/client.js",
     "cordis.patch.yml",
     "README.md"
