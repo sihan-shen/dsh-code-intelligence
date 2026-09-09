@@ -1,4 +1,9 @@
-export { Config, parseSnapshotConfig } from './config.js'
+export { parseSnapshotConfig } from './config.js'
+export { ConfigP0Schema as Config, parseConfigP0, createResolverP0 } from './p0-runtime.js'
+export type { ConfigP0, ResolverP0, RuntimeP0, SessionHandleP0 } from './p0-runtime.js'
+export { repoMapP0, symbolQueryP0, relationQueryP0, encodeCursorP0, decodeCursorP0 } from './p0-query.js'
+export { expandSourceP0, SourceBudgetP0 } from './p0-source.js'
+export { createToolsP0 } from './p0-tools.js'
 export { RepositorySnapshotStore } from './snapshot.js'
 export { extractFallbackSymbols } from './fallback.js'
 export { buildSymbolIndex, InternalSymbolIndexStore } from './symbol-index.js'
@@ -18,7 +23,8 @@ export type { InternalSymbolRelationV1, SymbolAdapterResultV1, InternalSymbolEnt
 export type { AdapterUnavailableCode, AdapterUnavailableV1, HostNetworkIsolation, LspDeploymentConfigV1, LspDeploymentEnvironmentKey } from './types.js'
 export type { ContextCompiler, ContextCompilerOptions, ContextCompilerStats } from './types.js'
 
-// Additive M1 foundation APIs. Default plugin/runtime registration remains V1.
+// P0 foundation and M2 queries. V1 programmatic exports above remain available;
+// the default plugin now registers only the four no-cache P0 query tools.
 export { parseSnapshotConfigP0, collectSnapshotP0 } from './p0-snapshot.js'
 export type { SnapshotHooksP0 } from './p0-snapshot.js'
 export { createVerifiedReaderP0, P0ReadError } from './p0-reader.js'
