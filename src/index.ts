@@ -23,8 +23,8 @@ export type { InternalSymbolRelationV1, SymbolAdapterResultV1, InternalSymbolEnt
 export type { AdapterUnavailableCode, AdapterUnavailableV1, HostNetworkIsolation, LspDeploymentConfigV1, LspDeploymentEnvironmentKey } from './types.js'
 export type { ContextCompiler, ContextCompilerOptions, ContextCompilerStats } from './types.js'
 
-// P0 foundation and M2 queries. V1 programmatic exports above remain available;
-// the default plugin now registers only the four no-cache P0 query tools.
+// P0 foundation and M3 queries/refresh. V1 programmatic exports above remain available;
+// the default plugin registers the five no-cache P0 tools.
 export { parseSnapshotConfigP0, collectSnapshotP0 } from './p0-snapshot.js'
 export type { SnapshotHooksP0 } from './p0-snapshot.js'
 export { createVerifiedReaderP0, P0ReadError } from './p0-reader.js'

@@ -5,7 +5,7 @@ Bounded repository facts and verified source reads for coding agents.
 ## Status and compatibility
 
 **This branch implements M3 (R1–R4), the no-cache P0 query/source/refresh milestone.**
-The planned milestone label is `0.3.0-alpha.2`; **`package.json` remains `0.2.1`**
+The planned milestone label is `0.3.0-alpha.3`; **`package.json` remains `0.2.1`**
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
 
@@ -90,7 +90,7 @@ Lines share the same map as symbol positions: CRLF, LF, CR, U+2028 and U+2029,
 including an empty final line after a terminator. Empty offset windows are legal;
 surrogate-pair splits are not. Optional `paddingLines` is 0–20 per side, only for
 range modes, expanding to full touched lines and clipping padding at file edges.
-Explicit `blockId` returns `cache-unavailable` in M2; omit it.
+Explicit `blockId` returns `cache-unavailable` while the optional M4 cache is not implemented; omit it.
 
 All agents/root calls within one live Session share a source-success budget:
 default **262,144 final JSON bytes**, including source escaping and package metadata,
