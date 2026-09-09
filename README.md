@@ -4,7 +4,10 @@ Bounded repository facts and verified source reads for coding agents.
 
 ## Status and compatibility
 
-**This branch implements M3 (R1–R4), the no-cache P0 query/source/refresh milestone.**
+**This branch implements the M3 no-cache P0 query/source/refresh path; full R4 acceptance is still pending.**
+Main-thread review fixed competing first builds after initialization failure and
+added queue/close regressions. Lifecycle logging and the remaining deterministic
+retry/cleanup acceptance cases are not complete; see [M3 progress](doc/m3-progress.md).
 The planned milestone label is `0.3.0-alpha.3`; **`package.json` remains `0.2.1`**
 under the current no-version-change/no-release authorization. These breaking
 branch behaviors are not a published `0.2.1` patch or a released alpha.
