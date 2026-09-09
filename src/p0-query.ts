@@ -4,7 +4,7 @@ import {
   parseRepoMapPageP0, parseSymbolQueryResultP0, parseRelationQueryResultP0,
   type CodeIntelligenceFailureCodeP0, type FailureDetailsP0, type ExtractionMetadataP0,
   type FileExtractionStateP0, type IndexResponseHeaderP0, type SymbolMatchP0,
-  type RepoMapPageP0, type SymbolQueryResultP0, type RelationQueryResultP0,
+  type RepoMapPageP0, type SymbolQueryResultP0, type RelationQueryResultP0, type RefreshSnapshotResultP0,
 } from '@han_05/dsh-context'
 import { indexProvenanceP0 } from './p0-build.js'
 import { CodeIntelligenceErrorP0 } from './p0-tool-errors.js'
@@ -36,6 +36,13 @@ export function receiptP0(index: BuiltIndexP0, path: string) {
   const receipt = index.snapshot.files.find(f => f.path === path)
   if (!receipt) return failureP0('not-found', 'Path is not in the captured snapshot.')
   return receipt
+}
+
+export function refreshResultP0(index: BuiltIndexP0, previousSnapshotId?: string): RefreshSnapshotResultP0 {
+  const states = index.fileExtractionStates
+  const value = { ...headerP0(index, states), changed: previousSnapshotId === undefined || previousSnapshotId !== index.snapshot.snapshotId, scanCoverage: index.scanCoverage }
+  if (outputBytesP0(value) > O.maxOutputBytes) return failureP0('budget-exceeded', 'Response exceeds the output budget.', { limit: 'maxOutputBytes', requestedOutputBytes: outputBytesP0(value), maxOutputBytes: O.maxOutputBytes })
+  return value
 }
 
 export function extractionP0(states: readonly FileExtractionStateP0[]): ExtractionMetadataP0 {

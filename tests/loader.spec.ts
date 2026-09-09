@@ -6,14 +6,14 @@ import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import ToolRuntime, { type ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { sha256Utf8, parseCodeIntelligenceFailureP0, parseRepoMapPageP0, parseSymbolQueryResultP0, parseRelationQueryResultP0, parseExpandSourceResultP0 } from '@han_05/dsh-context'
+import { sha256Utf8, parseCodeIntelligenceFailureP0, parseRepoMapPageP0, parseSymbolQueryResultP0, parseRelationQueryResultP0, parseExpandSourceResultP0, parseRefreshSnapshotResultP0 } from '@han_05/dsh-context'
 import { apply } from '../src/plugin.ts'
 import { createResolverP0, parseConfigP0 } from '../src/p0-runtime.ts'
 import { CodeIntelligenceErrorP0 } from '../src/p0-tool-errors.ts'
 
 const cleanup: Array<() => unknown> = []
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose() })
-const names = ['context_repo_map', 'context_symbol_query', 'context_relation_query', 'context_expand_source']
+const names = ['context_repo_map', 'context_symbol_query', 'context_relation_query', 'context_expand_source', 'context_refresh_snapshot']
 async function root() {
   const path = await mkdtemp(join(tmpdir(), 'm2-registry-'))
   cleanup.push(() => rm(path, { recursive: true, force: true }))
@@ -93,7 +93,7 @@ describe('M2 Q5 default plugin through the real Native registry', () => {
     await workspaces.create(first)
     const fiber = await mount(ctx)
     for (const name of names) expect(ctx.tools.get(name)).toBeDefined()
-    for (const name of ['code_repo_map', 'code_symbol_query', 'context_refresh_snapshot']) expect(ctx.tools.get(name)).toBeUndefined()
+    for (const name of ['code_repo_map', 'code_symbol_query']) expect(ctx.tools.get(name)).toBeUndefined()
     expect(ctx.get('contextCompiler')).toBeUndefined()
     const { s, detach } = session(ctx, first, 'first')
     const { s: other } = session(ctx, second, 'unregistered')
@@ -112,6 +112,10 @@ describe('M2 Q5 default plugin through the real Native registry', () => {
     expect(relations.indexFingerprint).toBe(symbols.indexFingerprint)
     const symbol = symbols.matches[0]
     expect(parseExpandSourceResultP0(data(await call(ctx, 'context_expand_source', { snapshotId: map.snapshotId, path: symbol.path, sourceHash: symbol.sourceHash, offsetRange: { startOffset: symbol.startOffset, endOffset: symbol.endOffset } }, s))).text).toBe('export class Main { run() { ping(); } }')
+    await writeFile(join(first, 'main.ts'), "export const Refreshed = true\n")
+    const refreshed = parseRefreshSnapshotResultP0(data(await call(ctx, 'context_refresh_snapshot', {}, s)))
+    expect(refreshed.changed).toBe(true)
+    expect(parseRepoMapPageP0(data(await call(ctx, 'context_repo_map', { path: 'main.ts' }, s))).items[0].sourceHash).not.toBe(symbol.sourceHash)
     failure(await call(ctx, 'context_repo_map', {}, other), 'access-denied')
     failure(await call(ctx, 'context_repo_map', {}), 'access-denied')
     await expect(readFile(join(first, '.dsh-context-cache', 'manifest.json'))).rejects.toMatchObject({ code: 'ENOENT' })

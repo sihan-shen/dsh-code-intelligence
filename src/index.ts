@@ -1,7 +1,7 @@
 export { parseSnapshotConfig } from './config.js'
 export { ConfigP0Schema as Config, parseConfigP0, createResolverP0 } from './p0-runtime.js'
 export type { ConfigP0, ResolverP0, RuntimeP0, SessionHandleP0 } from './p0-runtime.js'
-export { repoMapP0, symbolQueryP0, relationQueryP0, encodeCursorP0, decodeCursorP0 } from './p0-query.js'
+export { repoMapP0, symbolQueryP0, relationQueryP0, refreshResultP0, encodeCursorP0, decodeCursorP0 } from './p0-query.js'
 export { expandSourceP0, SourceBudgetP0 } from './p0-source.js'
 export { createToolsP0 } from './p0-tools.js'
 export { RepositorySnapshotStore } from './snapshot.js'
