@@ -15,7 +15,7 @@
 
 - `../dsh-context-cache`：C1 合同与确定性边界测试已提交：`c670e54`、`09588d2`、`3ee91a2`。覆盖确认写入、显式 block/lookup 分类、锁超时、损坏、workspace 隔离、indexFingerprint、淘汰与关闭。
 - `../dsh-context`：最小 DTO/parser 修改已提交：`042ae8c`（可选 `indexFingerprint`）与 `c16ccdc`（relation block kind）。全量测试通过。
-- 当前包：`0bc744c` 接入可选 cache 查询包装和显式 block 分类；`e8c4c38` 保证 cache 初始化失败降级；`a40f09b` 暴露 `code-intelligence` resolver service。默认 `cache.enabled` 为 false；refresh 不缓存；无 cache 查询/source 仍可用。
+- 当前包：`0bc744c` 接入可选 cache 查询包装和显式 block 分类；`e8c4c38` 保证 cache 初始化失败降级。默认 `cache.enabled` 为 false；refresh 不缓存；无 cache 查询/source 仍可用。
 
 ## 验证
 
