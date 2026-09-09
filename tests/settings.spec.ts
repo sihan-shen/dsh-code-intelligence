@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import SessionStore from '@deepseek-ai/dsh-session'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { MemorySettings } from './fixtures/memory-settings.ts'
 import { apply, CodeIntelligenceSettingsSchema } from '../src/plugin.ts'
 
@@ -27,6 +29,21 @@ describe('code-intelligence Host settings', () => {
     expect(descriptor?.value).toEqual({ cache: { enabled: false, maxEntries: 42, maxBytes: 4096, lockTimeoutMs: 17 } })
     await owner.dispose()
     await fiber.dispose()
+  })
+
+  it('registers restart semantics through the default plugin apply path', async () => {
+    const ctx = new Context()
+    ctx.provide('systemPrompt', { tools() { return () => {} }, section() { return () => {} } } as never)
+    const settingsFiber = await ctx.plugin(MemorySettings)
+    const sessions = await ctx.plugin(SessionStore)
+    const tools = await ctx.plugin(ToolRuntime, { mode: 'native' })
+    ctx.provide('workspaceRegistry', { async resolveByPath(path: string) { return { path } } } as never)
+    const fiber = await ctx.plugin(apply, { deploymentRoot: '.', revision: 'settings-test' })
+    expect(ctx.settings.describe().find(item => item.ns === 'code-intelligence')?.applies).toBe('restart')
+    await fiber.dispose()
+    await tools.dispose()
+    await sessions.dispose()
+    await settingsFiber.dispose()
   })
 
   it('accepts the schema boundaries and rejects invalid cache limits', async () => {
