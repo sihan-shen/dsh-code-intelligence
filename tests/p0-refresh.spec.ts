@@ -56,7 +56,7 @@ it('keeps an old lease usable while a refresh commits and releases it only after
   await resolver.release(session)
 })
 
-it('refresh failure preserves the active runtime and a later queued refresh can succeed', async () => {
+it('refresh failure preserves the active runtime and a later refresh can succeed', async () => {
   const { root, session } = await fixture()
   const resolver = createResolverP0({ deploymentRoot: '.', revision: 'm3', maxFiles: 1 }, registry(root))
   const first = await resolver.resolve(session, new AbortController().signal)
@@ -100,7 +100,7 @@ it('queues a refresh arriving during initialization and collects it after the in
   await resolver.release(session)
 })
 
-it('cancels queued refresh before commit and closing prevents a late candidate from publishing', async () => {
+it('cancels an active refresh and closes without publishing its late candidate', async () => {
   const { root, session } = await fixture()
   let signalEntered!: () => void
   const entered = new Promise<void>(resolve => { signalEntered = resolve })

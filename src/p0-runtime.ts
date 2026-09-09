@@ -165,7 +165,7 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
     const task = buildCandidate(session, state, AbortSignal.any([operationSignal, waitController.signal]), phase).then(candidate => {
       commit(state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]))
       return candidate
-    }, error => {
+    }).catch(error => {
       if (state.status === 'initializing') state.status = 'idle'
       throw error
     })
@@ -178,10 +178,10 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
   }
   function enqueueRefresh(session: Session, state: SessionState, signal: AbortSignal): Promise<RefreshSnapshotResultP0> {
     if (state.refreshQueueDepth >= MAX_REFRESH_QUEUE_P0) throw refreshOverloaded()
-    state.refreshQueueDepth++
+    const wasEmpty = state.refreshQueueDepth++ === 0
     const taskSignal = AbortSignal.any([signal, state.controller.signal])
     const previous = state.refreshTail
-    const task = previous.then(async () => {
+    const run = async () => {
       taskSignal.throwIfAborted()
       if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
       // A refresh arriving during initialization waits for that operation, but does not
@@ -189,18 +189,26 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       if (state.initial) { try { await state.initial } catch { /* this refresh is its own retry */ } }
       taskSignal.throwIfAborted()
       const before = state.runtime
-      const candidate = await buildCandidate(session, state, taskSignal, 'refresh')
-      commit(state, candidate, taskSignal)
+      // A queued refresh can become the first builder after initialization fails.
+      // Register that build synchronously so queries join it instead of racing it.
+      const candidate = before
+        ? await buildCandidate(session, state, taskSignal, 'refresh')
+        : await startInitial(session, state, taskSignal, 'refresh')
+      if (before) commit(state, candidate, taskSignal)
       return refreshResultP0(candidate.index, before?.index.snapshot.snapshotId)
-    }).finally(() => { state.refreshQueueDepth-- })
+    }
+    // Start an idle queue head synchronously: it owns initialization before any
+    // later query can arrive. Every refresh, including first build, counts toward
+    // the same bound and follows the same tail.
+    const task = (wasEmpty ? run() : previous.then(run)).finally(() => { state.refreshQueueDepth-- })
     state.refreshTail = task.then(() => {}, () => {})
     return task
   }
   async function closeState(state: SessionState): Promise<void> {
     if (state.closing) return state.closing
     state.status = 'closing'
-    state.controller.abort(closed())
-    state.closing = (async () => {
+    // Publish the cleanup promise before synchronous abort listeners can reenter.
+    state.closing = Promise.resolve().then(async () => {
       try { await state.initial } catch { /* candidate construction owns its cleanup */ }
       await state.refreshTail
       await Promise.all([...state.calls].map(call => call.done))
@@ -208,7 +216,8 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       state.retired.clear()
       state.status = 'closed'
       retained.delete(state)
-    })()
+    })
+    state.controller.abort(closed())
     return state.closing
   }
   const resolver: ResolverP0 = {
@@ -243,12 +252,6 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         sessions.set(session, state); retained.add(state)
       }
       if (state.status === 'closing' || state.status === 'closed') throw closed()
-      // An idle refresh owns the first build and publishes it as initialization.
-      if (!state.runtime && !state.initial) {
-        const initial = startInitial(session, state, signal, 'refresh')
-        const candidate = await waitFor(initial, AbortSignal.any([signal, state.controller.signal, ...(state.initialWaitSignal ? [state.initialWaitSignal] : [])]))
-        return refreshResultP0(candidate.index, undefined)
-      }
       // If initialization is already underway, queue a fresh collection after it;
       // never return the candidate that was sampled before this refresh arrived.
       const task = enqueueRefresh(session, state, signal)
