@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
-import { createResolverP0 } from '../src/p0-runtime.ts'
+import { buildIndexP0, P0BuildError } from '../src/p0-build.ts'
+import { createResolverP0, type RuntimeEventP0, type RuntimeP0 } from '../src/p0-runtime.ts'
 
 function barrier() {
   let release!: () => void
@@ -82,6 +83,76 @@ it('a failed active refresh does not prevent an already queued refresh from coll
   expect((await failed).message).toBe('build failure')
   expect((await next).changed).toBe(false)
   expect(f.lookups()).toBe(3)
+})
+
+it('retries one full build only for read races', async () => {
+  const f = await fixture()
+  let attempts = 0
+  const resolver = createResolverP0({ deploymentRoot: '.', revision: 'review' }, { async resolveByPath(path) { return { path } } }, {
+    async buildIndex(config, options) {
+      attempts++
+      if (attempts === 1) throw new P0BuildError('changed-during-read')
+      return buildIndexP0(config, options)
+    },
+  })
+  cleanup.push(() => resolver.dispose())
+  const result = await resolver.refresh!(f.session, signal())
+  expect(result.changed).toBe(true)
+  expect(attempts).toBe(2)
+})
+
+it('does not retry a second read race or a non-read build failure', async () => {
+  const f = await fixture()
+  for (const reason of ['read-failed', 'contract-invalid'] as const) {
+    let attempts = 0
+    const resolver = createResolverP0({ deploymentRoot: '.', revision: reason }, { async resolveByPath(path) { return { path } } }, {
+      async buildIndex() { attempts++; throw new P0BuildError(reason) },
+    })
+    await expect(resolver.refresh!(f.session, signal())).rejects.toMatchObject({ code: 'refresh-failed' })
+    expect(attempts).toBe(reason === 'read-failed' ? 2 : 1)
+    await resolver.dispose()
+  }
+})
+
+it('caller cancellation at the pre-commit barrier preserves the old runtime without closing', async () => {
+  const f = await fixture()
+  const commit = barrier()
+  let refreshBuild = false
+  const resolver = createResolverP0({ deploymentRoot: '.', revision: 'review' }, { async resolveByPath(path) { return { path } } }, {
+    async beforeCommit(phase) { if (phase === 'refresh' && refreshBuild) await commit.promise },
+  })
+  cleanup.push(() => resolver.dispose())
+  const old = await resolver.resolve(f.session, signal())
+  const oldRuntime = old.runtime; old.done()
+  refreshBuild = true
+  await writeFile(join(f.root, 'main.ts'), 'export const after = 2\n')
+  const controller = new AbortController()
+  const refreshing = resolver.refresh!(f.session, controller.signal)
+  await Promise.resolve(); await new Promise(resolve => setImmediate(resolve))
+  controller.abort(new Error('pre-commit cancel')); commit.release()
+  await expect(refreshing).rejects.toThrow('pre-commit cancel')
+  const current = await resolver.resolve(f.session, signal())
+  expect(current.runtime).toBe(oldRuntime)
+  current.done()
+})
+
+it('releases a retired runtime only after its last lease and isolates observer failures', async () => {
+  const f = await fixture()
+  const retired: RuntimeP0[] = [], released: RuntimeP0[] = [], events: RuntimeEventP0[] = []
+  const resolver = createResolverP0({ deploymentRoot: '.', revision: 'review' }, { async resolveByPath(path) { return { path } } }, {
+    onRuntimeRetired(runtime) { retired.push(runtime); throw new Error('observer failure') },
+    onRuntimeReleased(runtime) { released.push(runtime) },
+    eventSink(event) { events.push(event); if (event.kind === 'runtime-retired') throw new Error('sink failure') },
+  })
+  cleanup.push(() => resolver.dispose())
+  const old = await resolver.resolve(f.session, signal())
+  await writeFile(join(f.root, 'main.ts'), 'export const after = 2\n')
+  await resolver.refresh!(f.session, signal())
+  expect(retired).toEqual([old.runtime])
+  expect(released).toEqual([])
+  old.done()
+  expect(released).toEqual([old.runtime])
+  expect(events.map(event => event.kind)).toEqual(expect.arrayContaining(['build-started', 'build-succeeded', 'runtime-committed', 'refresh-queued', 'runtime-retired', 'runtime-released']))
 })
 
 it('close alone cancels an active candidate, rejects queued calls, and waits for old leases', async () => {

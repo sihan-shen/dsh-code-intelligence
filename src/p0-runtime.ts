@@ -58,12 +58,26 @@ export function translateP0(error: unknown, phase: 'initialization' | 'refresh' 
   throw error
 }
 export type RuntimeP0 = { readonly index: BuiltIndexP0; readonly reader: VerifiedReaderP0; readonly config: SnapshotConfigP0 }
+export type RuntimeEventP0 = Readonly<{
+  kind: 'build-started' | 'build-retried' | 'build-succeeded' | 'build-failed' | 'refresh-queued' | 'runtime-committed' | 'runtime-retired' | 'runtime-released' | 'session-closing' | 'session-closed'
+  operationId?: number; phase?: 'initialization' | 'refresh'; sessionId?: string; queueDepth?: number; durationMs?: number; reason?: string
+  previousSnapshotId?: string; snapshotId?: string; indexFingerprint?: string
+}>
+/** Optional integration/test seams. Observer/sink failures never alter runtime behavior;
+ * beforeCommit is an awaited deterministic test barrier. */
+export type ResolverHooksP0 = Readonly<{
+  buildIndex?: typeof buildIndexP0
+  beforeCommit?: (phase: 'initialization' | 'refresh', candidate: RuntimeP0) => Promise<void>
+  onRuntimeRetired?: (runtime: RuntimeP0) => void
+  onRuntimeReleased?: (runtime: RuntimeP0) => void
+  eventSink?: (event: RuntimeEventP0) => void
+}>
 type Lifecycle = 'idle' | 'initializing' | 'active' | 'closing' | 'closed'
 type Lease = { readonly runtime: RuntimeP0; readonly done: Promise<void>; finish(): void }
 type SessionState = {
   readonly controller: AbortController; readonly budget: SourceBudgetP0; readonly calls: Set<Lease>
   status: Lifecycle; runtime?: RuntimeP0; initial?: Promise<RuntimeP0>; initialWaitSignal?: AbortSignal; refreshTail: Promise<void>; closing?: Promise<void>
-  readonly retired: Set<RuntimeP0>; refreshQueueDepth: number
+  readonly retired: Set<RuntimeP0>; readonly sessionId?: string; refreshQueueDepth: number; nextOperationId: number
 }
 export type SessionHandleP0 = { readonly runtime: RuntimeP0; readonly budget: SourceBudgetP0; readonly signal: AbortSignal; done(): void }
 export type ResolverP0 = {
@@ -88,17 +102,28 @@ function waitFor<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 /** M3 Session owner: active runtimes are immutable; replacement is synchronous at commit,
  * while captured leases keep retired runtimes alive until their callers finish. */
-export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry): ResolverP0 {
+export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry, hooks: ResolverHooksP0 = {}): ResolverP0 {
   const config = parseConfigP0(rawConfig)
   const sessions = new WeakMap<Session, SessionState>()
   const retained = new Set<SessionState>()
   const released = new WeakSet<Session>()
   let disposed = false
+  const invoke = (callback: (() => void) | undefined): void => { try { callback?.() } catch { /* diagnostics and test observers are isolated */ } }
+  const emit = (event: RuntimeEventP0): void => invoke(hooks.eventSink && (() => hooks.eventSink!(Object.freeze(event))))
+  const sessionId = (session: Session): string | undefined => {
+    const value = (session as unknown as { readonly id?: unknown }).id
+    return typeof value === 'string' ? value : undefined
+  }
+  const failureReason = (error: unknown): string => error instanceof P0ReadError || error instanceof P0BuildError ? error.reason
+    : error instanceof HarnessError ? error.code : error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name) ? error.name : 'unexpected'
 
-  async function buildCandidate(session: Session, state: SessionState, operationSignal: AbortSignal, phase: 'initialization' | 'refresh'): Promise<RuntimeP0> {
+  async function buildCandidate(session: Session, state: SessionState, operationSignal: AbortSignal, phase: 'initialization' | 'refresh', operationId: number): Promise<RuntimeP0> {
     const controller = new AbortController()
     const signal = AbortSignal.any([state.controller.signal, operationSignal, controller.signal])
     const deadlineMs = Date.now() + config.initializationTimeoutMs
+    const startedAt = Date.now()
+    const eventBase = { operationId, phase, sessionId: sessionId(session) }
+    emit({ kind: 'build-started', ...eventBase })
     const control = { signal, deadlineMs }
     const timer = setTimeout(() => controller.abort(initializationTimeout()), config.initializationTimeoutMs)
     try {
@@ -117,53 +142,76 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       try { parsed = parseSnapshotConfigP0({ ...snapshotConfig, workspaceRoot: root }) } catch { return failureP0('access-denied', 'Deployment root cannot be verified inside the Session workspace.') }
       let index: BuiltIndexP0 | undefined
       let lastReadFailure: P0BuildError | undefined
+      const build = hooks.buildIndex ?? buildIndexP0
       // A read race invalidates the whole candidate. At most one fresh full retry is allowed.
       for (let attempt = 0; attempt < 2; attempt++) {
         checkBuildControlP0(control)
         try {
-          index = await buildIndexP0(parsed, { control })
+          index = await build(parsed, { control })
           break
         } catch (error) {
           checkBuildControlP0(control)
           if (!(error instanceof P0BuildError) || !['changed-during-read', 'read-failed'].includes(error.reason) || attempt !== 0) throw error
           lastReadFailure = error
+          emit({ kind: 'build-retried', ...eventBase, reason: error.reason })
         }
       }
       if (!index) throw lastReadFailure ?? new P0BuildError('read-failed')
       const reader = await createVerifiedReaderP0(parsed.deploymentRoot)
       checkBuildControlP0(control)
       if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
-      return Object.freeze({ index, reader, config: parsed })
+      const runtime = Object.freeze({ index, reader, config: parsed })
+      emit({ kind: 'build-succeeded', ...eventBase, durationMs: Date.now() - startedAt, snapshotId: index.snapshot.snapshotId, indexFingerprint: index.indexFingerprint })
+      return runtime
     } catch (error) {
-      signal.throwIfAborted()
-      if (Date.now() >= deadlineMs) throw initializationTimeout()
-      return translateP0(error, phase)
+      let translated: unknown = error
+      try {
+        signal.throwIfAborted()
+        if (Date.now() >= deadlineMs) throw initializationTimeout()
+        translateP0(error, phase)
+      } catch (value) { translated = value }
+      emit({ kind: 'build-failed', ...eventBase, durationMs: Date.now() - startedAt, reason: failureReason(translated) })
+      throw translated
     } finally { clearTimeout(timer) }
   }
 
-  function commit(state: SessionState, candidate: RuntimeP0, signal: AbortSignal): void {
+  function commit(session: Session, state: SessionState, candidate: RuntimeP0, signal: AbortSignal, operationId: number, phase: 'initialization' | 'refresh'): void {
     signal.throwIfAborted()
     if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
     const old = state.runtime
     state.runtime = candidate
     state.status = 'active'
+    emit({ kind: 'runtime-committed', operationId, phase, sessionId: sessionId(session), previousSnapshotId: old?.index.snapshot.snapshotId,
+      snapshotId: candidate.index.snapshot.snapshotId, indexFingerprint: candidate.index.indexFingerprint })
     if (old) {
       state.retired.add(old)
+      invoke(hooks.onRuntimeRetired && (() => hooks.onRuntimeRetired!(old)))
+      emit({ kind: 'runtime-retired', operationId, phase, sessionId: sessionId(session), snapshotId: old.index.snapshot.snapshotId, indexFingerprint: old.index.indexFingerprint })
       // No lease means the retired immutable object can be dropped immediately.
-      if (![...state.calls].some(call => call.runtime === old)) state.retired.delete(old)
+      if (![...state.calls].some(call => call.runtime === old)) {
+        state.retired.delete(old)
+        invoke(hooks.onRuntimeReleased && (() => hooks.onRuntimeReleased!(old)))
+        emit({ kind: 'runtime-released', operationId, phase, sessionId: sessionId(session), snapshotId: old.index.snapshot.snapshotId, indexFingerprint: old.index.indexFingerprint })
+      }
     }
   }
-  function releaseRetired(state: SessionState, runtime: RuntimeP0): void {
-    if (![...state.calls].some(call => call.runtime === runtime)) state.retired.delete(runtime)
+  function releaseRetired(session: Session, state: SessionState, runtime: RuntimeP0): void {
+    if (state.retired.has(runtime) && ![...state.calls].some(call => call.runtime === runtime)) {
+      state.retired.delete(runtime)
+      invoke(hooks.onRuntimeReleased && (() => hooks.onRuntimeReleased!(runtime)))
+      emit({ kind: 'runtime-released', sessionId: sessionId(session), snapshotId: runtime.index.snapshot.snapshotId, indexFingerprint: runtime.index.indexFingerprint })
+    }
   }
-  function startInitial(session: Session, state: SessionState, operationSignal: AbortSignal, phase: 'initialization' | 'refresh'): Promise<RuntimeP0> {
+  function startInitial(session: Session, state: SessionState, operationSignal: AbortSignal, phase: 'initialization' | 'refresh', queuedOperationId?: number): Promise<RuntimeP0> {
     if (state.initial) return state.initial
     state.status = 'initializing'
     const waitController = new AbortController()
     const waitTimer = setTimeout(() => waitController.abort(initializationTimeout()), config.initializationTimeoutMs)
     state.initialWaitSignal = waitController.signal
-    const task = buildCandidate(session, state, AbortSignal.any([operationSignal, waitController.signal]), phase).then(candidate => {
-      commit(state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]))
+    const operationId = queuedOperationId ?? state.nextOperationId++
+    const task = buildCandidate(session, state, AbortSignal.any([operationSignal, waitController.signal]), phase, operationId).then(async candidate => {
+      await hooks.beforeCommit?.(phase, candidate)
+      commit(session, state, candidate, AbortSignal.any([operationSignal, state.initialWaitSignal!]), operationId, phase)
       return candidate
     }).catch(error => {
       if (state.status === 'initializing') state.status = 'idle'
@@ -179,6 +227,8 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
   function enqueueRefresh(session: Session, state: SessionState, signal: AbortSignal): Promise<RefreshSnapshotResultP0> {
     if (state.refreshQueueDepth >= MAX_REFRESH_QUEUE_P0) throw refreshOverloaded()
     const wasEmpty = state.refreshQueueDepth++ === 0
+    const operationId = state.nextOperationId++
+    emit({ kind: 'refresh-queued', operationId, phase: 'refresh', sessionId: sessionId(session), queueDepth: state.refreshQueueDepth })
     const taskSignal = AbortSignal.any([signal, state.controller.signal])
     const previous = state.refreshTail
     const run = async () => {
@@ -192,9 +242,12 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       // A queued refresh can become the first builder after initialization fails.
       // Register that build synchronously so queries join it instead of racing it.
       const candidate = before
-        ? await buildCandidate(session, state, taskSignal, 'refresh')
-        : await startInitial(session, state, taskSignal, 'refresh')
-      if (before) commit(state, candidate, taskSignal)
+        ? await buildCandidate(session, state, taskSignal, 'refresh', operationId)
+        : await startInitial(session, state, taskSignal, 'refresh', operationId)
+      if (before) {
+        await hooks.beforeCommit?.('refresh', candidate)
+        commit(session, state, candidate, taskSignal, operationId, 'refresh')
+      }
       return refreshResultP0(candidate.index, before?.index.snapshot.snapshotId)
     }
     // Start an idle queue head synchronously: it owns initialization before any
@@ -216,7 +269,9 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       state.retired.clear()
       state.status = 'closed'
       retained.delete(state)
+      emit({ kind: 'session-closed', sessionId: state.sessionId })
     })
+    emit({ kind: 'session-closing', sessionId: state.sessionId })
     state.controller.abort(closed())
     return state.closing
   }
@@ -227,20 +282,25 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       if (!session) return failureP0('access-denied', 'A live registered Session workspace is required.')
       let state = sessions.get(session)
       if (!state) {
-        state = { controller: new AbortController(), budget: new SourceBudgetP0(config.sessionSourceBytes), calls: new Set(), retired: new Set(), status: 'idle', refreshTail: Promise.resolve(), refreshQueueDepth: 0 }
+        state = { controller: new AbortController(), budget: new SourceBudgetP0(config.sessionSourceBytes), calls: new Set(), retired: new Set(), sessionId: sessionId(session), status: 'idle', refreshTail: Promise.resolve(), refreshQueueDepth: 0, nextOperationId: 1 }
         sessions.set(session, state); retained.add(state)
       }
       if (state.status === 'closing' || state.status === 'closed') throw closed()
-      const initial = state.runtime ? Promise.resolve(state.runtime) : startInitial(session, state, state.controller.signal, 'initialization')
-      const combined = AbortSignal.any([signal, state.controller.signal, ...(state.initialWaitSignal ? [state.initialWaitSignal] : [])])
-      const runtime = await waitFor(initial, combined)
-      combined.throwIfAborted()
+      const callSignal = AbortSignal.any([signal, state.controller.signal])
+      let runtime = state.runtime
+      if (!runtime) {
+        const initial = startInitial(session, state, state.controller.signal, 'initialization')
+        const initializationWaitSignal = AbortSignal.any([callSignal, state.initialWaitSignal!])
+        runtime = await waitFor(initial, initializationWaitSignal)
+        initializationWaitSignal.throwIfAborted()
+      }
+      callSignal.throwIfAborted()
       if (state.status !== 'active' || disposed) throw closed()
       let finish!: () => void
       const done = new Promise<void>(resolve => { finish = resolve })
       const lease: Lease = { runtime, done, finish }
       state.calls.add(lease)
-      return { runtime, budget: state.budget, signal: combined, done() { if (state!.calls.delete(lease)) { finish(); releaseRetired(state!, runtime) } } }
+      return { runtime, budget: state.budget, signal: callSignal, done() { if (state!.calls.delete(lease)) { finish(); releaseRetired(session, state!, runtime) } } }
     },
     async refresh(session, signal) {
       signal.throwIfAborted()
@@ -248,7 +308,7 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       if (!session) return failureP0('access-denied', 'A live registered Session workspace is required.')
       let state = sessions.get(session)
       if (!state) {
-        state = { controller: new AbortController(), budget: new SourceBudgetP0(config.sessionSourceBytes), calls: new Set(), retired: new Set(), status: 'idle', refreshTail: Promise.resolve(), refreshQueueDepth: 0 }
+        state = { controller: new AbortController(), budget: new SourceBudgetP0(config.sessionSourceBytes), calls: new Set(), retired: new Set(), sessionId: sessionId(session), status: 'idle', refreshTail: Promise.resolve(), refreshQueueDepth: 0, nextOperationId: 1 }
         sessions.set(session, state); retained.add(state)
       }
       if (state.status === 'closing' || state.status === 'closed') throw closed()
