@@ -94,7 +94,7 @@ export function mountCodeIntelligence(ctx: CodeIntelligenceContext, options: Cod
 
 export const name = 'dsh-code-intelligence'
 export const inject = ['tools']
-export const provide: string[] = ['code-intelligence']
+export const provide: string[] = []
 
 export const apply = async (
   ctx: CodeIntelligenceContext & {
@@ -124,10 +124,9 @@ export const apply = async (
         const workspaceContext = injected as unknown as typeof ctx
         const workspaceRegistry = (injected as unknown as { readonly workspaceRegistry: WorkspaceRegistry }).workspaceRegistry
         const resolver = createResolverP0(config, workspaceRegistry)
-        const disposer = workspaceContext.provide?.('code-intelligence', resolver)
         registerCodeIntelligenceToolsP0(workspaceContext as Context, createToolsP0(resolver))
         workspaceContext.on('session/disposed', session => resolver.release(session))
-        workspaceContext.effect(() => async () => { disposer?.(); await resolver.dispose() }, 'dsh-code-intelligence: P0 Session holder')
+        workspaceContext.effect(() => () => resolver.dispose(), 'dsh-code-intelligence: P0 Session holder')
         finishStartup()
       } catch (error) {
         failStartup(error)
