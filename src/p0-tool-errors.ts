@@ -77,7 +77,9 @@ export function registerCodeIntelligenceToolsP0(ctx: Context, definitions: reado
           try {
             return await definition.execute(args, exec)
           } catch (error) {
-            if (active && attempts.get(exec.token) === attempt) {
+            // A recognized class is not proof of a business failure when it is
+            // the caller's abort reason. Preserve the undecorated host channel.
+            if (active && !exec.signal.aborted && attempts.get(exec.token) === attempt) {
               if (error instanceof CodeIntelligenceErrorP0) attempt.failure = error.failure
               else if (error instanceof ToolArgsError && error.code === 'INVALID_ARGS') attempt.failure = invalidArguments
               if (attempt.failure && error instanceof HarnessError) {

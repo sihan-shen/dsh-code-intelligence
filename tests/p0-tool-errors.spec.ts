@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { HarnessError, ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import ToolRuntime, { defineTool, type ToolDefinition, type ToolExecutionResult, type ToolRunContext } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool, ToolArgsError, type ToolDefinition, type ToolExecutionResult, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { OUTPUT_POLICY_P0, parseCodeIntelligenceFailureP0 } from '@han_05/dsh-context'
 import { CodeIntelligenceErrorP0, registerCodeIntelligenceToolsP0 } from '../src/p0-tool-errors.ts'
 
@@ -285,6 +285,30 @@ describe('P0 native ToolRuntime failure bridge', () => {
     expect(result).toMatchObject({ isError: true, error: { message: 'cancelled by caller', info: { code: 'TOOL_ABORTED' } } })
     expect(result.meta).toBeUndefined()
     expect(result.content).toEqual([{ type: 'text', text: 'Error: cancelled by caller' }])
+  })
+
+  it.each(['business', 'arguments'] as const)('does not project a caller-owned %s cancellation reason as a business failure', async kind => {
+    const ctx = await registry()
+    const reason = kind === 'business' ? stale() : new ToolArgsError(['caller cancellation'])
+    const run = async (decorated: boolean) => {
+      const entered = gate(), controller = new AbortController()
+      const definition = fixture(async (_args, exec) => {
+        entered.resolve()
+        await new Promise<void>(resolve => exec.signal.addEventListener('abort', () => resolve(), { once: true }))
+        exec.signal.throwIfAborted()
+        return 'unreachable'
+      }, decorated ? 'p0_query' : 'plain')
+      if (decorated) mount(ctx, definition)
+      else ctx.tools.register(definition)
+      const pending = call(ctx, { query: 'wait' }, 'cancel-owned-reason', controller.signal, definition.name)
+      await entered.promise
+      controller.abort(reason)
+      return pending
+    }
+    const plain = await run(false), decorated = await run(true)
+    expect(decorated).toEqual(plain)
+    expect(decorated.meta).toBeUndefined()
+    expect(decorated.content).toEqual([{ type: 'text', text: `Error: ${reason.message}` }])
   })
 
   it('does not keep a previous retry DTO when the latest attempt succeeds or has the same routing without the recognized class', async () => {

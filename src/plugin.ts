@@ -1,11 +1,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createCodeIntelligenceTools, createContextTools } from './tools.js'
-import { createCodeIntelligenceRuntime, createSessionRuntimeResolver } from './session-runtime.js'
 import type { SessionRuntimeResolver, WorkspaceRegistry } from './session-runtime.js'
-import { Config } from './config.js'
+import { ConfigP0Schema as Config, createResolverP0, type ConfigP0 } from './p0-runtime.js'
+import { createToolsP0 } from './p0-tools.js'
+import { registerCodeIntelligenceToolsP0 } from './p0-tool-errors.js'
 import type { RepositorySnapshotStore } from './snapshot.js'
 import type { InternalSymbolIndexStore } from './symbol-index.js'
-import type { ContextCompiler, ContextCompilerStats, SnapshotConfigV1 } from './types.js'
+import type { ContextCompiler, ContextCompilerStats } from './types.js'
 
 export type CodeIntelligenceRuntimeOptions = {
   readonly snapshot: RepositorySnapshotStore['snapshot']
@@ -52,7 +53,7 @@ function createSessionContextCompiler(resolver: SessionRuntimeResolver): Context
   })
 }
 
-export type CodeIntelligenceConfig = SnapshotConfigV1
+export type CodeIntelligenceConfig = Partial<ConfigP0> & Pick<ConfigP0, 'deploymentRoot' | 'revision'>
 
 const WORKSPACE_REGISTRY_STARTUP_TIMEOUT_MS = 5_000
 
@@ -92,8 +93,8 @@ export function mountCodeIntelligence(ctx: CodeIntelligenceContext, options: Cod
 }
 
 export const name = 'dsh-code-intelligence'
-export const inject = ['tools'] as const
-export const provide = ['contextCompiler'] as const
+export const inject = ['tools']
+export const provide: string[] = []
 
 export const apply = async (
   ctx: CodeIntelligenceContext & {
@@ -101,11 +102,7 @@ export const apply = async (
   },
   config: CodeIntelligenceConfig,
 ): Promise<void> => {
-  if (typeof ctx.inject !== 'function') {
-    const runtime = await createCodeIntelligenceRuntime(config)
-    mountCodeIntelligence(ctx, runtime)
-    return
-  }
+  if (typeof ctx.inject !== 'function') throw new TypeError('P0 default plugin requires Cordis and a registered Session workspace; use V1 programmatic APIs explicitly for old consumers.')
   await new Promise<void>((resolve, reject) => {
     let state: 'starting' | 'active' | 'failed' | 'disposed' = 'starting'
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -126,8 +123,10 @@ export const apply = async (
       try {
         const workspaceContext = injected as unknown as typeof ctx
         const workspaceRegistry = (injected as unknown as { readonly workspaceRegistry: WorkspaceRegistry }).workspaceRegistry
-        const resolver = createSessionRuntimeResolver(config, workspaceRegistry)
-        mountCodeIntelligence(workspaceContext, { resolver })
+        const resolver = createResolverP0(config, workspaceRegistry)
+        registerCodeIntelligenceToolsP0(workspaceContext as Context, createToolsP0(resolver))
+        workspaceContext.on('session/disposed', session => resolver.release(session))
+        workspaceContext.effect(() => () => resolver.dispose(), 'dsh-code-intelligence: P0 Session holder')
         finishStartup()
       } catch (error) {
         failStartup(error)
