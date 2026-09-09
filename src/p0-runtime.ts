@@ -179,17 +179,18 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
   function enqueueRefresh(session: Session, state: SessionState, signal: AbortSignal): Promise<RefreshSnapshotResultP0> {
     if (state.refreshQueueDepth >= MAX_REFRESH_QUEUE_P0) throw refreshOverloaded()
     state.refreshQueueDepth++
+    const taskSignal = AbortSignal.any([signal, state.controller.signal])
     const previous = state.refreshTail
     const task = previous.then(async () => {
-      signal.throwIfAborted()
+      taskSignal.throwIfAborted()
       if (state.status === 'closing' || state.status === 'closed' || disposed) throw closed()
       // A refresh arriving during initialization waits for that operation, but does not
       // reuse its candidate. Its own collection starts only after initialization settles.
       if (state.initial) { try { await state.initial } catch { /* this refresh is its own retry */ } }
-      signal.throwIfAborted()
+      taskSignal.throwIfAborted()
       const before = state.runtime
-      const candidate = await buildCandidate(session, state, signal, 'refresh')
-      commit(state, candidate, signal)
+      const candidate = await buildCandidate(session, state, taskSignal, 'refresh')
+      commit(state, candidate, taskSignal)
       return refreshResultP0(candidate.index, before?.index.snapshot.snapshotId)
     }).finally(() => { state.refreshQueueDepth-- })
     state.refreshTail = task.then(() => {}, () => {})
@@ -248,6 +249,8 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
         const candidate = await waitFor(initial, AbortSignal.any([signal, state.controller.signal, ...(state.initialWaitSignal ? [state.initialWaitSignal] : [])]))
         return refreshResultP0(candidate.index, undefined)
       }
+      // If initialization is already underway, queue a fresh collection after it;
+      // never return the candidate that was sampled before this refresh arrived.
       const task = enqueueRefresh(session, state, signal)
       return waitFor(task, AbortSignal.any([signal, state.controller.signal]))
     },
