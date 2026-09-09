@@ -190,9 +190,15 @@ export function createResolverP0(rawConfig: unknown, registry: WorkspaceRegistry
       }
       if (!index) throw lastReadFailure ?? new P0BuildError('read-failed')
       const reader = await createVerifiedReaderP0(parsed.deploymentRoot)
-      const cache = config.cache.enabled
-        ? await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot, maxEntries: config.cache.maxEntries, maxBytes: config.cache.maxBytes, lockTimeoutMs: config.cache.lockTimeoutMs })
-        : undefined
+      let cache: ContextCacheStoreApiV1 | undefined
+      if (config.cache.enabled) {
+        try {
+          cache = await ContextCacheStore.open({ deploymentRoot: parsed.deploymentRoot, maxEntries: config.cache.maxEntries, maxBytes: config.cache.maxBytes, lockTimeoutMs: config.cache.lockTimeoutMs })
+        } catch {
+          // Cache availability is an optimization boundary, never a runtime prerequisite.
+          cache = undefined
+        }
+      }
       checkBuildControlP0(control)
       if (state.status === 'closing' || state.status === 'closed' || disposed) { await cache?.close(); throw closed() }
       const runtime = Object.freeze({ index, reader, config: parsed, ...(cache === undefined ? {} : { cache }) })
