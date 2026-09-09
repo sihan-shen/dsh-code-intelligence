@@ -130,7 +130,7 @@ to squeeze into a budget. Host post-processing/transport cost is not measured.
   reset the Session source budget. Cancellation/deadline remain cooperative; synchronous
   TypeScript parsing cannot be hard-interrupted. `context_refresh_snapshot` is the
   only refresh path; there is no watcher.
-- **M4 C1–C4 are implemented for the P0 runtime.** Downstream V1 compiler consumers are not migrated here.
+- **M4 C1–C4 are implemented for the P0 runtime.** This includes deterministic cache-boundary, fallback, budget, lifecycle, Host settings, and Web settings-surface coverage. Downstream V1 compiler consumers are not migrated here.
 - **M5 is not complete:** no fixed real-repository independent gold/edit-refresh
   acceptance or release. No claim of retrieval savings or coding-task benefit;
   benefit status is **not-ready**.
@@ -176,4 +176,4 @@ control-flow bugs, additional cursor/escaped-JSON/source-range checks, and the
 200-test full-suite result. A subsequent [main-thread review](doc/m2-review-round2.md)
 fixed the outer Native bridge also misclassifying caller-owned cancellation reasons,
 added registry/Unicode-endpoint/reentrant-close regressions, and passed **205 tests**.
-This does not certify M4–M5 or downstream migration.
+This does not certify M5, downstream migration, publication, real-repository gold fixtures, or performance gains.

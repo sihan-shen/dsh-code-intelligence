@@ -16,15 +16,15 @@
 - `../dsh-context-cache`：C1 合同与确定性边界测试已提交：`c670e54`、`09588d2`、`3ee91a2`。覆盖确认写入、显式 block/lookup 分类、锁超时、损坏、workspace 隔离、indexFingerprint、淘汰与关闭。
 - `../dsh-context`：最小 DTO/parser 修改已提交：`042ae8c`（可选 `indexFingerprint`）与 `c16ccdc`（relation block kind）。全量测试通过。
 - 当前包：`0bc744c` 接入可选 cache 查询包装和显式 block 分类；`e8c4c38` 保证 cache 初始化失败降级。默认 `cache.enabled` 为 false；refresh 不缓存；无 cache 查询/source 仍可用。
-- Host `code-intelligence` namespace 已接入官方 settings service：嵌套 `cache.enabled/maxEntries/maxBytes/lockTimeoutMs`，默认关闭，`applies: 'restart'`，并使用 consumer fiber 生命周期。
-- Web client bundle 已接入 `settings.plugin.item`，使用 rc.1 官方 slot/settings/locale surface；启用项是原生可访问 checkbox，数字字段支持草稿、校验、恢复默认、放弃、revision-fenced 原子保存和中英文重启提示。
+- Host `code-intelligence` namespace 已通过官方 `settings.register` 接入 settings service：嵌套 `cache.enabled/maxEntries/maxBytes/lockTimeoutMs`，默认关闭，明确 `applies: 'restart'`，并使用 consumer fiber 生命周期；没有自行解析 settings.yaml，也没有使用 `installSection` 替代注册语义。
+- Web client bundle 已接入 `settings.plugin.item`，使用 rc.1 官方 slot/settings/locale surface；按方案 A，启用项是正确绑定 label/checked/disabled/onChange 的原生可访问 checkbox（不混入 alpha.2 或伪造官方 Switch），数字字段支持草稿、校验、恢复默认、放弃、revision-fenced 原子保存和中英文重启提示。
 
 ## 验证
 
-当前包已通过 `pnpm run typecheck`、`pnpm test -- --run`（22 files / 218 tests）、`pnpm run build` 和 `git diff --check`。两个跨包仓库工作树均干净，且各自 C1/full contract tests 已通过。
+当前包已通过直接调用 `./node_modules/.bin/tsc -b --pretty false`、`./node_modules/.bin/tsdown --config tsdown.config.ts`、`./node_modules/.bin/vitest run`（26 files / 231 tests；含 C4 cache acceptance、Web controller、Host settings、package-entry、Native loader/client bundle 覆盖）和 `git diff --check`。两个跨包仓库工作树均干净，且各自 C1/full contract tests 已通过。
 
 ## 未完成 / 限制
 
 - 下游 V1 compiler consumers 尚未迁移；不宣称 M5、发布、真实仓 gold 或性能收益。
 - Web card intentionally uses a native accessible checkbox because the locked rc.1 primitives surface does not export `Switch`; no alpha package or copied component is used。
-- 根 lockfile 的普通安装会产生超出当前 importer 的 peer snapshot churn，未将这类 churn 作为交付内容；后续需在不扩大 diff 的条件下单独处理。
+- 根 lockfile 的普通安装会产生超出当前 importer 的 peer snapshot churn，本任务严格未运行 pnpm，也未把这类 churn 作为交付内容；根 lockfile 仍由主线程在不扩大 diff 的条件下单独处理。
