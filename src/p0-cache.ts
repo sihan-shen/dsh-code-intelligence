@@ -5,6 +5,7 @@ import {
   parseRelationQueryResultP0,
   parseRepoMapPageP0,
   parseSymbolQueryResultP0,
+  OUTPUT_POLICY_P0,
   type ContextBlockV1,
   type RelationQueryResultP0,
   type RepoMapPageP0,
@@ -45,7 +46,7 @@ function sourceBoundary(value: CacheBoundaryV1): CacheBoundaryV1 {
 }
 
 function dependencies(index: BuiltIndexP0): readonly string[] {
-  return [...index.snapshot.files].map(file => file.contentHash).sort()
+  return [...new Set(index.snapshot.files.map(file => file.contentHash))].sort()
 }
 
 function sources(index: BuiltIndexP0): readonly { readonly path: string; readonly contentHash: string }[] {
@@ -97,7 +98,26 @@ function validateQueryBlock(index: BuiltIndexP0, kind: P0QueryKind, block: Conte
     || block.adapterVersion !== b.adapterVersion
     || block.compilerPolicyVersion !== b.compilerPolicyVersion
     || JSON.stringify(block.sources) !== JSON.stringify(sources(index))) throw new TypeError('cache boundary mismatch')
-  return parserFor(kind)(JSON.parse(block.text))
+  const value = parserFor(kind)(JSON.parse(block.text))
+  if (value.snapshotId !== b.snapshotId || value.indexFingerprint !== b.indexFingerprint) throw new TypeError('cache projection version mismatch')
+  const snapshotSources = new Map(index.snapshot.files.map(file => [file.path, file.contentHash]))
+  const facts = 'items' in value ? value.items : 'matches' in value ? value.matches : []
+  if (facts.some(fact => snapshotSources.get(fact.path) !== fact.sourceHash)) throw new TypeError('cache fact source mismatch')
+  if ('relationships' in value && value.relationships.some(relationship => {
+    const endpoint = relationship.source
+    if (endpoint.kind === 'file') return snapshotSources.get(endpoint.path) !== endpoint.sourceHash
+    if (endpoint.kind === 'symbol') {
+      const source = index.symbols.find(symbol => symbol.symbolId === endpoint.symbolId)
+      return source === undefined || snapshotSources.get(source.path) !== source.sourceHash
+    }
+    return true
+  })) throw new TypeError('cache relationship source mismatch')
+  return value
+}
+
+function withConfirmedBlockId(value: P0QueryResult, blockId: string): P0QueryResult {
+  const associated = { ...value, blockId } as P0QueryResult
+  return Buffer.byteLength(JSON.stringify(associated)) <= OUTPUT_POLICY_P0.maxOutputBytes ? associated : value
 }
 
 function readBlock(cache: ContextCacheStoreApiV1, blockId: string, b: CacheBoundaryV1): Promise<CacheBlockReadV1> {
@@ -111,7 +131,7 @@ function readBlock(cache: ContextCacheStoreApiV1, blockId: string, b: CacheBound
 async function confirmedBlock(cache: ContextCacheStoreApiV1, block: ContextBlockV1, b: CacheBoundaryV1): Promise<CacheWriteResultV1> {
   try {
     return cache.putBlockConfirmed === undefined
-      ? (await cache.putBlock(block, b), { status: 'confirmed' })
+      ? { status: 'skipped', reason: 'write-skipped' }
       : await cache.putBlockConfirmed(block, b)
   } catch {
     return { status: 'unavailable', reason: 'storage-error' }
@@ -121,7 +141,7 @@ async function confirmedBlock(cache: ContextCacheStoreApiV1, block: ContextBlock
 async function confirmedLookup(cache: ContextCacheStoreApiV1, key: CacheLookupKeyV1, blockId: string): Promise<CacheWriteResultV1> {
   try {
     return cache.putLookupConfirmed === undefined
-      ? (await cache.putLookup(key, [blockId]), { status: 'confirmed' })
+      ? { status: 'skipped', reason: 'write-skipped' }
       : await cache.putLookupConfirmed(key, [blockId])
   } catch {
     return { status: 'unavailable', reason: 'storage-error' }
@@ -154,16 +174,21 @@ export async function cachedP0Query(
       if (read.status === 'hit') {
         const parsed = parseContextBlockV1(read.block)
         const value = validateQueryBlock(index, kind, parsed)
-        return { ...value, blockId: parsed.blockId } as P0QueryResult
+        return withConfirmedBlockId(value, parsed.blockId)
       }
     } catch { /* corrupt or forged cache record: recompute */ }
   }
   const value = execute()
-  const block = makeBlock(index, kind, value, workspaceRoot)
+  let block: ContextBlockV1
+  try { block = makeBlock(index, kind, value, workspaceRoot) } catch {
+    // Block construction can touch paths that disappeared after the snapshot.
+    // The already verified immutable query remains valid without persistence.
+    return value
+  }
   const stored = await confirmedBlock(cache, block, b)
   if (stored.status !== 'confirmed') return value
   const indexed = await confirmedLookup(cache, key, block.blockId)
-  return indexed.status === 'confirmed' ? { ...value, blockId: block.blockId } as P0QueryResult : value
+  return indexed.status === 'confirmed' ? withConfirmedBlockId(value, block.blockId) : value
 }
 
 export type ExplicitBlockStatus = 'hit' | 'not-found' | 'stale-block' | 'cache-unavailable'
@@ -203,8 +228,17 @@ export async function readExplicitP0Block(runtime: RuntimeP0, blockId: string, p
         : block.kind === 'relation' ? parseRelationQueryResultP0(JSON.parse(block.text)) : undefined
     if (value === undefined) return { status: 'stale-block' }
     const values = 'items' in value ? value.items : 'matches' in value ? value.matches : []
-    return values.some(item => item.path === path && item.sourceHash === sourceHash)
-      ? { status: 'hit', block } : { status: 'stale-block' }
+    const direct = values.some(item => item.path === path && item.sourceHash === sourceHash)
+    const related = 'relationships' in value && value.relationships.some(relationship => {
+      const endpoint = relationship.source
+      if (endpoint.kind === 'file') return endpoint.path === path && endpoint.sourceHash === sourceHash
+      if (endpoint.kind === 'symbol') {
+        const source = index.symbols.find(symbol => symbol.symbolId === endpoint.symbolId)
+        return source?.path === path && source.sourceHash === sourceHash
+      }
+      return false
+    })
+    return direct || related ? { status: 'hit', block } : { status: 'stale-block' }
   } catch { return { status: 'stale-block' } }
 }
 

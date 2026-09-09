@@ -190,7 +190,7 @@ function overlaps(first: Window, second: Window): boolean {
 }
 
 function projectionDependencies(snapshot: RepositorySnapshotStore['snapshot']): readonly string[] {
-  return [...snapshot.files].map(file => file.contentHash).sort()
+  return [...new Set(snapshot.files.map(file => file.contentHash))].sort()
 }
 
 function sourceBoundary(boundary: CacheBoundaryV1): CacheBoundaryV1 {
@@ -429,16 +429,20 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
     const request = expansionRequest(value)
     const boundary = currentBoundary()
     const sourceCacheBoundary = sourceBoundary(boundary)
-    if (cache === undefined) throw new TypeError('cache unavailable while validating source block')
-    let baseRead: CacheBlockReadV1
-    try { baseRead = cache.readBlock === undefined
-      ? { status: 'hit', block: (await cache.getBlock(request.blockId, boundary))! }
-      : await cache.readBlock(request.blockId, boundary) } catch { baseRead = { status: 'unavailable', reason: 'storage-error' } }
-    if (baseRead.status === 'unavailable') throw new TypeError('cache unavailable while validating source block')
-    const base = baseRead.status === 'hit' ? baseRead.block : undefined
+    let base = knownBlocks.get(request.blockId)
+    if (base === undefined && cache !== undefined) {
+      let baseRead: CacheBlockReadV1
+      try { baseRead = cache.readBlock === undefined
+        ? await cache.getBlock(request.blockId, boundary).then(block => block === undefined
+          ? { status: 'missing' as const, reason: 'record-missing' as const }
+          : { status: 'hit' as const, block })
+        : await cache.readBlock(request.blockId, boundary) } catch { baseRead = { status: 'unavailable', reason: 'storage-error' } }
+      if (baseRead.status === 'unavailable') throw new TypeError('cache unavailable while validating source block')
+      if (baseRead.status === 'hit') base = parseContextBlockV1(baseRead.block)
+    }
     checkOpen()
     aborted(signal)
-    if (base === undefined) throw new TypeError('source expansion requires a prior cached projection block')
+    if (base === undefined) throw new TypeError('source expansion requires a prior projection block')
     if (base.kind !== 'repo-map' && base.kind !== 'symbol') throw new TypeError('source expansion requires a repo-map or symbol block')
     const validatedBase = validateProjectionBlock(base, base.kind, boundary, store.snapshot)
     const source = validatedBase.sources.find(item => item.path === request.path)
@@ -461,25 +465,29 @@ export function createContextCompiler(options: ContextCompilerOptions): ContextC
       if (state.usedBytes + block.byteLength > MAX_CONTEXT_SESSION_BYTES) throw new RangeError('source expansion exceeds the session byte budget')
       checkOpen()
       aborted(signal)
-      let cachedRead: CacheBlockReadV1 | undefined
-      try { cachedRead = cache === undefined || cache.readBlock === undefined ? undefined : await cache.readBlock(block.blockId, sourceCacheBoundary) } catch { cachedRead = { status: 'unavailable', reason: 'storage-error' } }
-      const cachedBlock = cache === undefined ? undefined : cache.readBlock === undefined ? await cache.getBlock(block.blockId, sourceCacheBoundary) : cachedRead?.status === 'hit' ? cachedRead.block : undefined
-      checkOpen()
-      aborted(signal)
-      if (cachedBlock !== undefined) {
-        cacheHits += 1
-      } else {
-        cacheMisses += 1
-        try {
-          if (cache !== undefined && cache.putBlockConfirmed === undefined) await cache.putBlock(block, sourceCacheBoundary)
-          else if (cache?.putBlockConfirmed !== undefined) await cache.putBlockConfirmed(block, sourceCacheBoundary)
-        } catch { /* source correctness does not depend on cache persistence */ }
+      let cachedBlock: ContextBlockV1 | undefined
+      if (cache !== undefined) {
+        let cachedRead: CacheBlockReadV1 | undefined
+        try { cachedRead = cache.readBlock === undefined ? undefined : await cache.readBlock(block.blockId, sourceCacheBoundary) } catch { cachedRead = { status: 'unavailable', reason: 'storage-error' } }
+        try { cachedBlock = cache.readBlock === undefined ? await cache.getBlock(block.blockId, sourceCacheBoundary) : cachedRead?.status === 'hit' ? cachedRead.block : undefined } catch { cachedBlock = undefined }
         checkOpen()
         aborted(signal)
+        if (cachedBlock !== undefined) {
+          cacheHits += 1
+        } else {
+          cacheMisses += 1
+          try {
+            if (cache.putBlockConfirmed === undefined) await cache.putBlock(block, sourceCacheBoundary)
+            else await cache.putBlockConfirmed(block, sourceCacheBoundary)
+          } catch { /* source correctness does not depend on cache persistence */ }
+          checkOpen()
+          aborted(signal)
+        }
       }
+      const result = cachedBlock === undefined ? block : parseContextBlockV1(cachedBlock)
       state.usedBytes += block.byteLength
       state.windows.push(requestedWindow)
-      return cachedBlock ?? block
+      return result
     })
   }
 

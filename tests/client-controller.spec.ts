@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   codeIntelligenceDraftValid,
+  codeIntelligenceDraftEqual,
+  codeIntelligenceCanReset,
   codeIntelligenceMutations,
   codeIntelligenceSavePlan,
   parseCodeIntelligenceInteger,
@@ -15,6 +17,20 @@ const defaults: CodeIntelligenceDraft = {
 }
 
 describe('code-intelligence settings controller folds', () => {
+  it('allows resetting saved non-default values without an unrelated edit', () => {
+    const saved = { ...defaults, enabled: true }
+    expect(codeIntelligenceCanReset(saved, defaults, true, false)).toBe(true)
+    expect(codeIntelligenceCanReset(defaults, defaults, true, false)).toBe(false)
+    expect(codeIntelligenceCanReset(saved, defaults, false, false)).toBe(false)
+    expect(codeIntelligenceCanReset(saved, defaults, true, true)).toBe(false)
+  })
+
+  it('compares accepted numeric values rather than draft spelling', () => {
+    expect(codeIntelligenceDraftEqual({ ...defaults, maxEntries: '0020' }, { ...defaults, maxEntries: '20' })).toBe(true)
+    expect(codeIntelligenceDraftEqual({ ...defaults, maxEntries: '0020' }, defaults)).toBe(false)
+    expect(codeIntelligenceDraftEqual({ ...defaults, maxEntries: '' }, { ...defaults, maxEntries: '' })).toBe(false)
+  })
+
   it('validates whole-number drafts and refuses invalid saves', () => {
     expect(parseCodeIntelligenceInteger('0', 1)).toBeUndefined()
     expect(parseCodeIntelligenceInteger('1.5', 1)).toBeUndefined()

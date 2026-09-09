@@ -138,6 +138,17 @@ export function codeIntelligenceSavePlan(draft: CodeIntelligenceDraft, base: Cod
   return { mutations: codeIntelligenceMutations(draft, base), revision }
 }
 
+export function codeIntelligenceDraftEqual(left: Draft, right: Draft): boolean {
+  if (!codeIntelligenceDraftValid(left) || !codeIntelligenceDraftValid(right)) return false
+  const a = codeIntelligenceValues(left), b = codeIntelligenceValues(right)
+  return left.enabled === right.enabled && a.maxEntries === b.maxEntries
+    && a.maxBytes === b.maxBytes && a.lockTimeoutMs === b.lockTimeoutMs
+}
+
+export function codeIntelligenceCanReset(draft: Draft, base: Draft, writable: boolean, saving: boolean): boolean {
+  return writable && !saving && !codeIntelligenceDraftEqual(draft, base)
+}
+
 function CodeIntelligenceCard(props: PropsRuntime<'settings.plugin.item'> & PropsLocale<typeof LOCALE_NS> & { scope: SettingsScope<CodeIntelligenceSettings> }) {
   const { t, scope } = props
   const snapshot = useSyncExternalStore(
@@ -176,8 +187,9 @@ function CodeIntelligenceCard(props: PropsRuntime<'settings.plugin.item'> & Prop
       if (plan === undefined) return
       await scope.mutate(plan.mutations, plan.revision)
       const accepted = draftOf(scope)
-      if (JSON.stringify(accepted) !== JSON.stringify(draft)) setFailed(true)
+      if (!codeIntelligenceDraftEqual(accepted, draft)) setFailed(true)
       else {
+        setDraft(accepted)
         setDirty(false)
         setRevision(scope.getSnapshot().revision)
       }
@@ -233,7 +245,7 @@ function CodeIntelligenceCard(props: PropsRuntime<'settings.plugin.item'> & Prop
       {dirty ? <p role="status">{t('unsaved')}</p> : null}
       {failed ? <p role="alert">{t('saveFailed')}</p> : null}
       <div style={styles.actions}>
-        <button type="button" disabled={!dirty || saving} onClick={reset}>{t('reset')}</button>
+        <button type="button" disabled={!codeIntelligenceCanReset(draft, baseDraftOf(scope), snapshot.writable, saving)} onClick={reset}>{t('reset')}</button>
         <button type="button" disabled={!dirty || saving} onClick={discard}>{t('discard')}</button>
         <button type="button" disabled={!dirty || !valid || saving || !snapshot.writable} onClick={() => { void save() }}>{saving ? t('saving') : t('save')}</button>
       </div>

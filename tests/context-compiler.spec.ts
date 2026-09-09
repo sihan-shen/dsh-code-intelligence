@@ -149,6 +149,27 @@ describe('ContextCompiler projection blocks', () => {
     await cache.close()
   })
 
+  it('deduplicates identical source dependencies before persistent lookup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-context-duplicate-sources-'))
+    roots.push(root)
+    const source = 'export const same = true\n'
+    await writeFile(join(root, 'a.ts'), source)
+    await writeFile(join(root, 'b.ts'), source)
+    const store = await RepositorySnapshotStore.create(config(root))
+    const adapter = await extractFallbackSymbols(store)
+    const index = buildSymbolIndex(store.snapshot.snapshotId, adapter, adapter.entries)
+    const cache = await ContextCacheStore.open({ deploymentRoot: root })
+    const compiler = createContextCompiler({ workspaceRoot: root, store, index, cache })
+    const request = { snapshotId: store.snapshot.snapshotId, limit: 10 }
+
+    const first = await compiler.repoMap(request, signal())
+    const second = await compiler.repoMap(request, signal())
+
+    expect(second).toEqual(first)
+    expect(compiler.cacheStats).toEqual({ hits: 1, misses: 1 })
+    await compiler.dispose()
+  })
+
   it('records one projection miss, then a hit, and does not reuse a stale boundary', async () => {
     const { root, store, index, cache, compiler } = await fixture()
     const request = { snapshotId: store.snapshot.snapshotId, limit: 1 }
@@ -287,6 +308,32 @@ describe('ContextCompiler projection blocks', () => {
 })
 
 describe('ContextCompiler progressive source disclosure', () => {
+  it('uses in-memory projection associations when the optional cache is disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-context-no-cache-'))
+    roots.push(root)
+    await mkdir(join(root, 'src'), { recursive: true })
+    const text = 'export function direct() { return true }\n'
+    await writeFile(join(root, 'src', 'direct.ts'), text)
+    const store = await RepositorySnapshotStore.create(config(root))
+    const adapter = await extractFallbackSymbols(store)
+    const index = buildSymbolIndex(store.snapshot.snapshotId, adapter, adapter.entries)
+    const compiler = createContextCompiler({ workspaceRoot: root, store, index })
+    const base = await compiler.repoMap({ snapshotId: store.snapshot.snapshotId, limit: 10 }, signal())
+    const sourceHash = fileHash(store, 'src/direct.ts')
+
+    const expanded = await compiler.expandSource({
+      blockId: base.blockId,
+      path: 'src/direct.ts',
+      sourceHash,
+      startOffset: 0,
+      endOffset: text.length,
+    }, signal())
+
+    expect(expanded.kind).toBe('source-window')
+    expect(expanded.text).toBe(text)
+    await compiler.dispose()
+  })
+
   it('requires a cached projection block and matching path/hash, then returns bounded provenance', async () => {
     const { store, cache, compiler } = await fixture('const π = "🙂 source"\nexport function authenticate() { return true }\n')
     const base = await compiler.repoMap({ snapshotId: store.snapshot.snapshotId, limit: 10 }, signal())
