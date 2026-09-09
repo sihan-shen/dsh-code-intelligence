@@ -4,7 +4,7 @@ Bounded repository facts and verified source reads for coding agents.
 
 ## Status and compatibility
 
-**This branch implements M4 C1–C3 for the optional-cache P0 runtime resource model.**
+**This branch implements M4 C1–C4 for the optional-cache P0 runtime resource model, including the Host settings namespace and Web settings card.**
 Main-thread review fixed competing first builds after initialization failure,
 isolated query leases from initialization deadlines, and added deterministic
 queue/retry/commit/retirement regressions. A bounded injectable lifecycle event
@@ -130,8 +130,7 @@ to squeeze into a budget. Host post-processing/transport cost is not measured.
   reset the Session source budget. Cancellation/deadline remain cooperative; synchronous
   TypeScript parsing cannot be hard-interrupted. `context_refresh_snapshot` is the
   only refresh path; there is no watcher.
-- **M4 is not complete:** no P0 cache, block persistence, explicit stale/missing
-  block classification, or migrated downstream compiler integration.
+- **M4 C1–C4 are implemented for the P0 runtime.** Downstream V1 compiler consumers are not migrated here.
 - **M5 is not complete:** no fixed real-repository independent gold/edit-refresh
   acceptance or release. No claim of retrieval savings or coding-task benefit;
   benefit status is **not-ready**.

@@ -12,19 +12,23 @@
     "node": "^22.19.0 || >=24"
   },
   "type": "module",
-  "main": "./lib/index.mjs",
-  "types": "./lib/index.d.mts",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.mts",
-      "default": "./lib/index.mjs"
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.mjs",
-    "lib/index.d.mts",
+    "lib/index.js",
+    "lib/types/**/*.d.ts",
+    "lib/client.js",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -32,7 +36,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsdown --out-dir lib --external typescript",
+    "build": "tsdown --config tsdown.config.ts",
     "prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "typecheck": "tsc -b --pretty false",
@@ -42,26 +46,44 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web",
+      "external": [
+        "@deepseek-ai/dsh-client-ui-settings/client",
+        "@deepseek-ai/dsh-client-locale/client"
+      ]
     }
   },
   "dependencies": {
     "@deepseek-ai/dsh-subprocess": "0.1.2-rc.1",
     "@han_05/dsh-context": "^0.2.0",
     "@han_05/dsh-context-cache": "^0.2.0",
+    "@deepseek-ai/schemastery": "3.18.2",
     "picomatch": "4.0.7",
     "typescript": "5.9.3"
   },
   "devDependencies": {
-    "@types/node": "26.3.0",
     "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-client-locale": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
     "@deepseek-ai/dsh-session": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-settings": "0.1.2-rc.1",
     "@deepseek-ai/dsh-storage": "0.1.2-rc.1",
     "@deepseek-ai/dsh-storage-domain": "0.1.2-rc.1",
     "@deepseek-ai/dsh-tools": "0.1.2-rc.1",
     "@deepseek-ai/dsh-workspace": "0.1.2-rc.1",
-    "typescript": "5.9.3",
+    "@types/node": "26.3.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
     "tsdown": "0.18.0",
+    "typescript": "5.9.3",
     "vitest": "4.0.18"
   },
   "peerDependencies": {

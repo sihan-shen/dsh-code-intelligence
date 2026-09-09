@@ -35,6 +35,8 @@ it('exposes the built plugin entry and package metadata', async () => {
   }
   expect(packageJson.exports['.']).toBeDefined()
   expect(packageJson.exports['./cordis.patch.yml']).toBe('./cordis.patch.yml')
+  expect(packageJson.exports['./client']).toEqual({ default: './lib/client.js' })
+  expect(packageJson.files).toContain('lib/client.js')
   expect(packageJson.files).toContain('README.md')
 })
 

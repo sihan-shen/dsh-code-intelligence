@@ -16,6 +16,8 @@
 - `../dsh-context-cache`：C1 合同与确定性边界测试已提交：`c670e54`、`09588d2`、`3ee91a2`。覆盖确认写入、显式 block/lookup 分类、锁超时、损坏、workspace 隔离、indexFingerprint、淘汰与关闭。
 - `../dsh-context`：最小 DTO/parser 修改已提交：`042ae8c`（可选 `indexFingerprint`）与 `c16ccdc`（relation block kind）。全量测试通过。
 - 当前包：`0bc744c` 接入可选 cache 查询包装和显式 block 分类；`e8c4c38` 保证 cache 初始化失败降级。默认 `cache.enabled` 为 false；refresh 不缓存；无 cache 查询/source 仍可用。
+- Host `code-intelligence` namespace 已接入官方 settings service：嵌套 `cache.enabled/maxEntries/maxBytes/lockTimeoutMs`，默认关闭，`applies: 'restart'`，并使用 consumer fiber 生命周期。
+- Web client bundle 已接入 `settings.plugin.item`，使用 rc.1 官方 slot/settings/locale surface；启用项是原生可访问 checkbox，数字字段支持草稿、校验、恢复默认、放弃、revision-fenced 原子保存和中英文重启提示。
 
 ## 验证
 
@@ -23,6 +25,6 @@
 
 ## 未完成 / 限制
 
-- Host settings namespace schema 与 DSH Web `settings.plugin.item` Code Intelligence 卡片尚未实现。
-- 当前插件没有可直接解析的官方 client bundle 依赖：`require.resolve` 对 `@deepseek-ai/dsh-client-ui-settings/client`、`@deepseek-ai/dsh-client-ui-settings-plugins/client`、`@deepseek-ai/dsh-client-ui-slots`、`@deepseek-ai/dsh-client-ui-primitives`、`@deepseek-ai/dsh-client-store`、`react`、`@types/react` 均失败。按用户批准的 unblock 范围，需要仅修改本包 manifest/build 配置并在不改 lockfile、不安装依赖的条件下继续；若 typecheck/build 无法解析则必须保持 BLOCKED。
-- C4 专门跨运行时/预算/淘汰回归测试、Host/Web settings client bundle 尚未提交；不宣称 M5、发布、真实仓 gold 或收益。
+- 下游 V1 compiler consumers 尚未迁移；不宣称 M5、发布、真实仓 gold 或性能收益。
+- Web card intentionally uses a native accessible checkbox because the locked rc.1 primitives surface does not export `Switch`; no alpha package or copied component is used。
+- 根 lockfile 的普通安装会产生超出当前 importer 的 peer snapshot churn，未将这类 churn 作为交付内容；后续需在不扩大 diff 的条件下单独处理。

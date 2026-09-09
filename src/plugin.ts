@@ -1,5 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
+import Schema from '@deepseek-ai/schemastery'
+import type SettingsProvider from '@deepseek-ai/dsh-settings'
 import { createCodeIntelligenceTools, createContextTools } from './tools.js'
+import type { CacheConfigP0 } from './p0-runtime.js'
 import type { SessionRuntimeResolver, WorkspaceRegistry } from './session-runtime.js'
 import { ConfigP0Schema as Config, createResolverP0, type ConfigP0 } from './p0-runtime.js'
 import { createToolsP0 } from './p0-tools.js'
@@ -55,6 +58,27 @@ function createSessionContextCompiler(resolver: SessionRuntimeResolver): Context
 
 export type CodeIntelligenceConfig = Partial<ConfigP0> & Pick<ConfigP0, 'deploymentRoot' | 'revision'>
 
+export type CodeIntelligenceSettings = {
+  readonly cache: CacheConfigP0
+}
+
+/** The Host-owned user settings contract. Defaults are also used by the browser form. */
+export const CodeIntelligenceSettingsSchema = Schema.object({
+  cache: Schema.object({
+    enabled: Schema.boolean().default(false),
+    maxEntries: Schema.number().step(1).min(1).max(10_000).default(10_000),
+    maxBytes: Schema.number().step(1).min(1).max(268_435_456).default(268_435_456),
+    lockTimeoutMs: Schema.number().step(1).min(0).default(250),
+  }).default({ enabled: false, maxEntries: 10_000, maxBytes: 268_435_456, lockTimeoutMs: 250 }),
+})
+
+const CODE_INTELLIGENCE_SETTINGS_NS = 'code-intelligence'
+const DEFAULT_CACHE: CacheConfigP0 = Object.freeze({
+  enabled: false,
+  maxEntries: 10_000,
+  maxBytes: 268_435_456,
+  lockTimeoutMs: 250,
+})
 const WORKSPACE_REGISTRY_STARTUP_TIMEOUT_MS = 5_000
 
 type CodeIntelligenceContext = Pick<Context, 'effect' | 'on'> & {
@@ -99,10 +123,32 @@ export const provide: string[] = []
 export const apply = async (
   ctx: CodeIntelligenceContext & {
     readonly inject?: Context['inject']
+    readonly get?: Context['get']
   },
   config: CodeIntelligenceConfig,
 ): Promise<void> => {
   if (typeof ctx.inject !== 'function') throw new TypeError('P0 default plugin requires Cordis and a registered Session workspace; use V1 programmatic APIs explicitly for old consumers.')
+
+  // Settings are an optional Host service. Registering on the consumer fiber
+  // gives the namespace the consumer lifetime; sampling it once is deliberate:
+  // `applies: restart` must not hot-switch a live cache generation.
+  let startupConfig: CodeIntelligenceConfig = { ...config, cache: config.cache ?? DEFAULT_CACHE }
+  const settings = ctx.get?.('settings') as SettingsProvider | undefined
+  if (settings !== undefined) {
+    const scope = settings.register(CODE_INTELLIGENCE_SETTINGS_NS, CodeIntelligenceSettingsSchema, {
+      base: { cache: startupConfig.cache ?? DEFAULT_CACHE },
+      applies: 'restart',
+      validate: value => {
+        const cache = value.cache ?? DEFAULT_CACHE
+        if (typeof cache.enabled !== 'boolean' || !Number.isSafeInteger(cache.maxEntries)
+          || !Number.isSafeInteger(cache.maxBytes) || !Number.isSafeInteger(cache.lockTimeoutMs)) {
+          throw new TypeError('code-intelligence cache settings are invalid')
+        }
+      },
+    })
+    const resolved = scope.get()
+    startupConfig = { ...config, cache: resolved.cache ?? DEFAULT_CACHE }
+  }
   await new Promise<void>((resolve, reject) => {
     let state: 'starting' | 'active' | 'failed' | 'disposed' = 'starting'
     let timeout: ReturnType<typeof setTimeout> | undefined
@@ -123,7 +169,7 @@ export const apply = async (
       try {
         const workspaceContext = injected as unknown as typeof ctx
         const workspaceRegistry = (injected as unknown as { readonly workspaceRegistry: WorkspaceRegistry }).workspaceRegistry
-        const resolver = createResolverP0(config, workspaceRegistry)
+        const resolver = createResolverP0(startupConfig, workspaceRegistry)
         registerCodeIntelligenceToolsP0(workspaceContext as Context, createToolsP0(resolver))
         workspaceContext.on('session/disposed', session => resolver.release(session))
         workspaceContext.effect(() => () => resolver.dispose(), 'dsh-code-intelligence: P0 Session holder')
