@@ -338,9 +338,9 @@ surface, because those schemas are re-sent on every request: `default` 1,987
 chars, `additive` 8,350, `replacement` 6,755 (structured share 76.2% / 94.2%).
 Full write-up: `doc/m5-tool-surface-audit.md`.
 
-## Phase 2b — fairness re-run (v2 wording)
+## Phase 2b — fairness re-run (v2 wording; historical accuracy only, not a current conclusion)
 
-Phase 2 v1 asked nine `source`/`relation` questions in the tested tool's own
+Phase 2 v1 asked seven `source`/`relation` questions in the tested tool's own
 vocabulary (`half-open UTF-16 code-unit range`, `padding`/`clamped`,
 ``List every `calls` relation``), so part of what it measured was "can you
 reproduce our request model". Phase 2b rewrites those questions into tool-free
@@ -348,15 +348,19 @@ language and changes **no answer**: `build-agent-tasks.mjs` asserts this with
 
 ```bash
 node eval/m5/build-agent-tasks.mjs --verify-against eval/m5/agent-tasks.v1.json
+# Current generator layers tasks as natural/conformance/tool-shaped; v1 remains archive-only.
 ```
 
 which fails unless all 20 `answerSpec` values are byte-identical to the archived
 v1 set and no task was added or dropped.
 
-The task set now carries a `vocabulary` field (`neutral` | `tool-shaped`). The
-primary accuracy figure is the `neutral` subset, reported per arm under
-`byVocabulary`; the one remaining tool-shaped task (`src-04-empty-offset-range`,
-a zero-width range with no plain-language equivalent) is a diagnostic only.
+The task set now carries a `vocabulary` layer (`natural` | `conformance` |
+`tool-shaped`). Natural semantic retrieval, frozen coordinate/byte conformance,
+and tool-shaped diagnostics are reported separately and are never pooled. Reports
+expose protocol-eligible accuracy, per-task majority, category macro average, and
+token median/IQR. Historical v1 accuracy claims are invalidated by the v2 wording
+audit; this benchmark is exploratory and does not support generalization or
+SWE/coding-effect claims.
 
 Two other fixes: the system prompt preamble no longer hints at the structured
 tools' strengths, and the product's own `systemPrompt` sections are now

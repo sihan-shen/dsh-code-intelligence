@@ -139,9 +139,10 @@ consumer 位于 `/tmp/m5c22`、`/tmp/m5c24`，用隔离 pnpm `--ignore-workspace
 `not-ready`。
 
 Phase 2 在该试点之上补上\"有模型参与\"的一环（预登记判定规则 +
-冻结任务集，三臂对照，`N = 3`），结论为：正确率提升为真（85.0% → 98.3%），
-但每题 token 中位数升到 1.00 → 4.62 倍，预登记规则 R2 不成立且 R6 证伪子句被触发。
-详见 `doc/m5-phase2-preregistration.md` 与 `doc/m5-phase2-results.md`；
-原始数据 `node_modules/.cache/m5-eval/reports/agent-comparison.json`。
-该实验同样**不是 M5 验收证据**，只覆盖只读检索问答，不改变本文第 8 节任何结论，
-收益维度仍为 `not-ready`。
+冻结任务集，三臂对照）。旧 v1 准确率结论已撤销：v2 提示审计使原判别任务翻盘，且
+当前冻结样本存在 natural/conformance/tool-shaped 分层、任务相关性与单一 corpus 限制。
+修复后的 harness 只把 protocol-eligible completed run 纳入 completed/majority，并输出 ITT、
+category macro、task-cluster bootstrap、token median/IQR 与 provider attempt 证据。
+详见 `doc/m5-phase2-preregistration.md` 与 `doc/m5-phase2-results.md`；未运行新的付费 provider。
+该实验同样**不是 M5 验收证据**，只覆盖只读检索问答，不支持泛化或 SWE/coding 收益，收益维度仍为
+`not-ready`。

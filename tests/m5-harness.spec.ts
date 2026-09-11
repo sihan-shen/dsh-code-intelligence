@@ -9,6 +9,12 @@ import {
   DSH_PROFILE_MODULES,
   EVALUATION_CODE_INTELLIGENCE_CONFIG,
   assertEvaluationHostConsistency,
+  assertGoldIsolation,
+  assertGeneralizationEligible,
+  pairedBootstrap,
+  summarizeRunOutcomes,
+  summarizeCategoryMetrics,
+  medianIqr,
   createAgentRunSchedule,
   expectedTargetTokens,
   jsonRepairRequest,
@@ -137,6 +143,48 @@ describe('M5 comparison harness invariants', () => {
   it('disables cumulative Session source budget while retaining one arm runtime', () => {
     expect(EVALUATION_CODE_INTELLIGENCE_CONFIG).toMatchObject({ sessionSourceBytes: null })
     expect(Object.isFrozen(EVALUATION_CODE_INTELLIGENCE_CONFIG)).toBe(true)
+  })
+
+  it('classifies protocol outcomes while retaining legacy summaries', () => {
+    const runs = [
+      { taskId: 'a', ok: true, completionStatus: 'completed', protocolEligible: true },
+      { taskId: 'b', ok: true, completionStatus: 'completed', protocolEligible: false, failureClass: 'tool' },
+      { taskId: 'c', ok: false, completionStatus: 'failed', failureClass: 'timeout' },
+    ]
+    expect(summarizeRunOutcomes(runs).intentionToTreat.attempts).toBe(3)
+    expect(summarizeRunOutcomes(runs).intentionToTreat.correct).toBe(2)
+    expect(summarizeRunOutcomes(runs).completed.correct).toBe(1)
+    expect(summarizeRunOutcomes(runs).perProtocol.attempts).toBe(1)
+    expect(summarizeRunOutcomes(runs).failures.timeout).toBe(1)
+  })
+
+  it('keeps token statistics and category macro averages cluster-aware', () => {
+    expect(medianIqr([4, 1, 3, 2])).toMatchObject({ median: 2, q1: 1, q3: 3, iqr: 2 })
+    const result = summarizeCategoryMetrics([
+      { taskId: 'a', category: 'source', ok: true, completionStatus: 'completed', protocolEligible: true, totalTokens: 10 },
+      { taskId: 'b', category: 'relation', ok: false, completionStatus: 'completed', protocolEligible: true, totalTokens: 20 },
+    ])
+    expect(result.byCategory.source.perProtocol.correctRate).toBe(1)
+    expect(result.byCategory.relation.perProtocol.correctRate).toBe(0)
+    expect(result.macroAverage).toBe(0.5)
+  })
+
+  it('rejects gold leakage and formal claims without independent corpora', () => {
+    expect(() => assertGoldIsolation({ corpusRoot: '/tmp/corpus', goldPath: '/tmp/corpus/gold.json' })).toThrow('gold path')
+    expect(() => assertGoldIsolation({ corpusRoot: '/tmp/corpus', goldPath: '/tmp/gold.json', goldHash: 'abc123', providerMessages: [{ content: '/tmp/gold.json' }] })).toThrow('gold path')
+    expect(() => assertGoldIsolation({ corpusRoot: '/tmp/corpus', goldPath: '/tmp/gold.json', goldHash: 'abc123', providerMessages: [{ content: 'abc123' }] })).toThrow('fingerprint')
+    expect(assertGoldIsolation({ corpusRoot: '/tmp/corpus', goldPath: '/tmp/gold.json', providerMessages: [] })).toBe(true)
+    expect(() => assertGeneralizationEligible([{ id: 'zod', commit: '1', language: 'ts', framework: 'zod', deduplicated: true, independenceVerified: true }])).toThrow('at least two')
+    expect(assertGeneralizationEligible([
+      { id: 'zod', commit: '1', language: 'ts', framework: 'zod', deduplicated: true, independenceVerified: true },
+      { id: 'express', commit: '2', language: 'js', framework: 'express', deduplicated: true, independenceVerified: true },
+    ]).eligible).toBe(true)
+  })
+
+  it('emits paired task bootstrap evidence with fixed treatment direction', () => {
+    const result = pairedBootstrap({ baseline: [{ taskId: 'x', ok: false }], treatment: [{ taskId: 'x', ok: true }] }, 'treatment', 'baseline', { iterations: 20 })
+    expect(result).toMatchObject({ treatment: 'treatment', baseline: 'baseline', direction: 'treatment-minus-baseline', tasks: 1, difference: 1 })
+    expect(result.ci95).toHaveLength(2)
   })
 
   it('excludes harness failures from the accuracy denominator', () => {

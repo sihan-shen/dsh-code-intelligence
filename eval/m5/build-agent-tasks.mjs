@@ -142,11 +142,13 @@ function questionFor(sample) {
 const gold = JSON.parse(await readFile(GOLD_PATH, 'utf8'))
 const goldBytes = await readFile(GOLD_PATH)
 
+const layerFor = (sample) => TOOL_SHAPED[sample.id] ? 'tool-shaped' : sample.category === 'source' ? 'conformance' : 'natural'
+
 const tasks = gold.samples.map((sample) => ({
   id: sample.id,
   category: sample.category,
   ...(sample.relationKind ? { relationKind: sample.relationKind } : {}),
-  vocabulary: TOOL_SHAPED[sample.id] ? 'tool-shaped' : 'neutral',
+  vocabulary: layerFor(sample),
   ...(TOOL_SHAPED[sample.id] ? { vocabularyNote: TOOL_SHAPED[sample.id] } : {}),
   question: questionFor(sample),
   answerSpec: answerSpecFor(sample),
@@ -184,7 +186,7 @@ const document = {
   schemaVersion: 2,
   kind: 'm5-phase2-agent-tasks',
   purpose:
-    'Frozen question/answer pairs for the M5 Phase 2 agent comparison between the real DSH default retrieval tools and the code-intelligence context_* tools. Deterministically derived from the frozen gold; contains no tool-specific tuning. v2 rewrites the nine source/relation questions that used the tested tool\'s own vocabulary into tool-free language, changing no answer.',
+    'Frozen question/answer pairs for the M5 Phase 2 agent comparison between the real DSH default retrieval tools and the code-intelligence context_* tools. Deterministically derived from the frozen gold; contains no tool-specific tuning. Tasks are partitioned into natural, conformance, and tool-shaped layers.',
   corpus: { ...gold.corpus, commit: COMMIT },
   sources: {
     gold: 'eval/m5/gold.json',
@@ -195,20 +197,21 @@ const document = {
   rules: {
     questions: 'Every arm receives the byte-identical question text; the task set is frozen before any arm runs.',
     answers:
-      'Grading is programmatic against answerSpec: exact string equality for text and path, exact integer equality for lines, order-independent set equality for path/name/target sets (compared after trimming and de-duplication).',
+      'Grading is programmatic against answerSpec: exact string equality for text and path, exact integer equality for lines, and set answers require unique elements plus exact normalized equality (duplicates are incorrect).',
     leakage:
-      'No question names a tool or a tool argument. The gold request fields (name/kind/pathPrefix/offsets/lineRange/types) are restated in plain language because they define the task, not the method. Nine v1 questions restated them in the tested tool\'s own vocabulary (UTF-16 code-unit offsets, padding/clamping, named relation types); v2 removes that vocabulary without changing any expected answer.',
+      'No question names a tool or a tool argument. The gold request fields (name/kind/pathPrefix/offsets/lineRange/types) are restated in plain language because they define the task, not the method. Seven v1 questions restated them in the tested tool\'s own vocabulary (UTF-16 code-unit offsets, padding/clamping, named relation types); v2 removes that vocabulary without changing any expected answer.',
     vocabulary:
-      'Each task carries a `vocabulary` field. The primary accuracy figure uses only `neutral` tasks; `tool-shaped` tasks are reported as a secondary diagnostic.',
+      'Each task carries a `vocabulary` field: natural semantic retrieval, conformance/coordinate contract, or tool-shaped diagnostic. Layers are reported separately and never pooled.',
     independence:
       'This file and its generator never call the tested extractor or any tool; they only project eval/m5/gold.json.',
     scope:
       'This is a retrieval QA benchmark over a frozen corpus, not a SWE task benchmark. It measures whether an agent can obtain and report repository facts, not whether it can change code.',
   },
   vocabularyPolicy: {
-    neutral: 'Question wording names no tool, no tool argument, and no retrieval strategy.',
+    natural: 'Declaration and relation questions expressed without tool-specific request vocabulary.',
+    conformance: 'Source-coordinate and exact-byte questions that test a frozen API contract.',
     toolShaped: Object.keys(TOOL_SHAPED),
-    rule: 'Primary accuracy is reported over the neutral subset. Tool-shaped tasks are reported separately and never mixed into the primary figure.',
+    rule: 'Natural, conformance, and tool-shaped layers are reported separately and never pooled.',
   },
   budget: {
     maxModelCalls: 8,

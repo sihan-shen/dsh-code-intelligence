@@ -52,9 +52,15 @@ import {
   sha256,
   summarizeCompletedRuns,
   summarizeTaskMajority,
+  summarizeRunOutcomes,
+  summarizeCategoryMetrics,
+  medianIqr,
+  pairedBootstrap,
+  assertGoldIsolation,
   verifyCorpusTree,
   forwardedPromptSections,
   systemPromptForTools,
+  tokensEst,
 } from './harness.mjs'
 
 const TASKS_PATH = fileURLToPath(new URL('./agent-tasks.json', import.meta.url))
@@ -77,6 +83,10 @@ const OUT_PATH = argValue('out', null) ?? REPORT_PATH
 
 const MODEL = process.env.M5_AGENT_MODEL ?? 'deepseek-chat'
 const BASE_URL = (process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com').replace(/\/+$/, '')
+const PROVIDER_TIMEOUT_MS = Number(process.env.M5_PROVIDER_TIMEOUT_MS ?? '30000')
+const PROVIDER_ATTEMPT_BUDGET = Number(process.env.M5_PROVIDER_ATTEMPT_BUDGET ?? '4')
+if (!Number.isSafeInteger(PROVIDER_TIMEOUT_MS) || PROVIDER_TIMEOUT_MS < 100) throw new Error('M5_PROVIDER_TIMEOUT_MS must be a safe integer >= 100')
+if (!Number.isSafeInteger(PROVIDER_ATTEMPT_BUDGET) || PROVIDER_ATTEMPT_BUDGET < 1) throw new Error('M5_PROVIDER_ATTEMPT_BUDGET must be a positive safe integer')
 
 const { key: API_KEY, source: API_KEY_SOURCE } = await resolveApiKey()
 
@@ -104,6 +114,10 @@ const ARMS = {
 const normalizePath = (value) => String(value).trim().replace(/^\.\//, '').replace(/\\/g, '/')
 const normalizeString = (value) => String(value).trim()
 const toSortedSet = (values, map = normalizeString) => [...new Set(values.map(map))].sort()
+const hasDuplicateSetElement = (values, map = normalizeString) => {
+  const mapped = values.map(map)
+  return new Set(mapped).size !== mapped.length
+}
 
 function extractJson(text) {
   if (typeof text !== 'string') return { value: null, reason: 'empty-content' }
@@ -125,6 +139,7 @@ function grade(spec, text) {
   switch (spec.kind) {
     case 'pathSet': {
       if (!Array.isArray(value.paths)) return { ok: false, reason: 'missing paths[]' }
+      if (hasDuplicateSetElement(value.paths, normalizePath)) return { ok: false, reason: 'duplicate path-set element' }
       const got = toSortedSet(value.paths, normalizePath)
       const want = toSortedSet(spec.paths, normalizePath)
       return { ok: JSON.stringify(got) === JSON.stringify(want), reason: 'path-set mismatch', got, want }
@@ -141,12 +156,14 @@ function grade(spec, text) {
     }
     case 'targetNameSet': {
       if (!Array.isArray(value.targets)) return { ok: false, reason: 'missing targets[]' }
+      if (hasDuplicateSetElement(value.targets)) return { ok: false, reason: 'duplicate name-set element' }
       const got = toSortedSet(value.targets)
       const want = toSortedSet(spec.names)
       return { ok: JSON.stringify(got) === JSON.stringify(want), reason: 'name-set mismatch', got, want }
     }
     case 'targetStringSet': {
       if (!Array.isArray(value.targets)) return { ok: false, reason: 'missing targets[]' }
+      if (hasDuplicateSetElement(value.targets)) return { ok: false, reason: 'duplicate target-set element' }
       const got = toSortedSet(value.targets)
       const want = toSortedSet(spec.targets)
       return { ok: JSON.stringify(got) === JSON.stringify(want), reason: 'target-set mismatch', got, want }
@@ -160,22 +177,47 @@ function grade(spec, text) {
 // Provider client (OpenAI-compatible chat completions; tool calling).
 // ---------------------------------------------------------------------------
 
-async function chatCompletion(body, { attempt = 1 } = {}) {
-  const response = await fetch(`${BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    const retryable = response.status === 429 || response.status >= 500
-    if (retryable && attempt < 4) {
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)))
-      return chatCompletion(body, { attempt: attempt + 1 })
-    }
-    throw new Error(`provider ${response.status}: ${text.slice(0, 400)}`)
+async function chatCompletion(body, { attemptBudget = PROVIDER_ATTEMPT_BUDGET } = {}) {
+  const attempts = []
+  for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
+    const started = performance.now()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort('provider-timeout'), PROVIDER_TIMEOUT_MS)
+    try {
+      const response = await fetch(`${BASE_URL}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(body), signal: controller.signal,
+      })
+      const status = response.status
+      if (!response.ok) {
+        const text = await response.text().catch(() => '')
+        const retryable = status === 408 || status === 429 || status >= 500
+        attempts.push({ attempt, status, retryable, ms: Math.round(performance.now() - started) })
+        if (retryable && attempt < attemptBudget) { await new Promise(resolve => setTimeout(resolve, 500 * 2 ** (attempt - 1))); continue }
+        const error = new Error(`provider ${status}: ${text.slice(0, 400)}`)
+        error.failureClass = 'provider'; error.providerStatus = status; error.providerAttempts = attempts; throw error
+      }
+      let payload
+      try { payload = await response.json() } catch (error) {
+        attempts.push({ attempt, status, retryable: false, ms: Math.round(performance.now() - started) })
+        error.failureClass = 'format'; error.providerStatus = status; error.providerAttempts = attempts; throw error
+      }
+      attempts.push({ attempt, status, retryable: false, ms: Math.round(performance.now() - started) })
+      payload._providerStatus = status; payload._providerAttempts = attempts
+      return payload
+    } catch (error) {
+      if (error.providerAttempts) throw error
+      const timedOut = controller.signal.aborted
+      attempts.push({ attempt, status: null, retryable: timedOut, ms: Math.round(performance.now() - started), error: timedOut ? 'timeout' : String(error?.message ?? error) })
+      if (timedOut) {
+        if (attempt < attemptBudget) { await new Promise(resolve => setTimeout(resolve, 500 * 2 ** (attempt - 1))); continue }
+        const timeoutError = new Error(`provider request timed out after ${PROVIDER_TIMEOUT_MS}ms`)
+        timeoutError.failureClass = 'timeout'; timeoutError.code = 'PROVIDER_TIMEOUT'; timeoutError.providerAttempts = attempts; throw timeoutError
+      }
+      error.failureClass = 'provider'; error.providerAttempts = attempts; throw error
+    } finally { clearTimeout(timeout) }
   }
-  return response.json()
+  throw new Error('provider attempt budget exhausted')
 }
 
 function toWireTools(schemas) {
@@ -189,7 +231,7 @@ function toWireTools(schemas) {
 // One agent run.
 // ---------------------------------------------------------------------------
 
-async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelCalls, maxToolCalls, maxOutputTokens }) {
+async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelCalls, maxToolCalls, maxOutputTokens, goldGuard }) {
   const started = performance.now()
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -200,8 +242,11 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
   let toolCallCount = 0
   let modelCalls = 0
   let toolResultBytes = 0
+  const providerAttempts = []
   let finalText = ''
   let stopReason = 'unknown'
+  let failureClass = null
+  let toolArgumentError = null
   const modelCallDetails = []
 
   while (modelCalls < maxModelCalls) {
@@ -215,7 +260,10 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
       max_tokens: maxOutputTokens,
       stream: false,
     }
-    const response = await chatCompletion(body)
+    goldGuard?.(body)
+    let response
+    try { response = await chatCompletion(body) } catch (error) { providerAttempts.push(...(error.providerAttempts ?? [])); throw error }
+    providerAttempts.push(...(response._providerAttempts ?? []))
     modelCallDetails.push({
       ordinal: modelCalls,
       kind: 'agent',
@@ -224,6 +272,10 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
       totalTokens: response.usage?.total_tokens ?? 0,
+      providerStatus: response._providerStatus ?? null,
+      providerAttempts: response._providerAttempts ?? [],
+      schemaTokens: tokensEst(Buffer.byteLength(JSON.stringify(body.tools ?? []), 'utf8')),
+      resultTokens: tokensEst([...new Set(messages.filter((message) => message.role === 'tool').map(message => String(message.content ?? '')))].reduce((bytes, content) => bytes + Buffer.byteLength(content, 'utf8'), 0)),
     })
     for (const key of Object.keys(usage)) usage[key] += response.usage?.[key] ?? 0
     const message = response.choices?.[0]?.message ?? {}
@@ -248,14 +300,24 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
         continue
       }
       toolCallCount += 1
-      let args = {}
-      try { args = JSON.parse(call_.function?.arguments ?? '{}') } catch {}
+      let args
+      try {
+        const rawArguments = call_.function?.arguments ?? '{}'
+        args = typeof rawArguments === 'string' ? JSON.parse(rawArguments) : rawArguments
+        if (args === null || typeof args !== 'object' || Array.isArray(args)) throw new Error('tool arguments must be a JSON object')
+      } catch (error) {
+        failureClass = 'tool'
+        toolArgumentError = `malformed arguments for ${name}: ${error?.message ?? error}`
+        messages.push({ role: 'tool', tool_call_id: call_.id, content: `Error: ${toolArgumentError}` })
+        continue
+      }
       try {
         const result = await call(name, args, `agent-${task.id}`)
         const text = result.isError ? `Error: ${result.error.message}` : contentText(result)
         toolResultBytes += result.isError ? 0 : contentBytes(result)
         messages.push({ role: 'tool', tool_call_id: call_.id, content: text })
       } catch (error) {
+        failureClass ??= error?.failureClass ?? 'tool'
         messages.push({ role: 'tool', tool_call_id: call_.id, content: `Error: ${error?.message ?? error}` })
       }
     }
@@ -263,6 +325,7 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
   }
 
   if (stopReason === 'unknown') stopReason = 'model-call-budget-exhausted'
+  if (stopReason === 'model-call-budget-exhausted' || stopReason === 'budget-exhausted') failureClass ??= 'budget'
   let graded = grade(task.answerSpec, finalText)
   let repairTurns = 0
   // Generic format repair, applied identically to every arm: a reply that is not
@@ -279,7 +342,10 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
     // Preserve the ordinary tool/schema context while preventing a format-only
     // repair from starting new retrieval after grading has begun.
     const repairBody = jsonRepairRequest({ model: MODEL, messages, wireTools, maxOutputTokens })
-    const response = await chatCompletion(repairBody)
+    goldGuard?.(repairBody)
+    let response
+    try { response = await chatCompletion(repairBody) } catch (error) { providerAttempts.push(...(error.providerAttempts ?? [])); throw error }
+    providerAttempts.push(...(response._providerAttempts ?? []))
     modelCallDetails.push({
       ordinal: modelCalls,
       kind: 'json-repair',
@@ -288,16 +354,29 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
       totalTokens: response.usage?.total_tokens ?? 0,
+      providerStatus: response._providerStatus ?? null,
+      providerAttempts: response._providerAttempts ?? [],
+      schemaTokens: tokensEst(Buffer.byteLength(JSON.stringify(repairBody.tools ?? []), 'utf8')),
+      resultTokens: tokensEst([...new Set(messages.filter((message) => message.role === 'tool').map(message => String(message.content ?? '')))].reduce((bytes, content) => bytes + Buffer.byteLength(content, 'utf8'), 0)),
     })
     for (const key of Object.keys(usage)) usage[key] += response.usage?.[key] ?? 0
     finalText = response.choices?.[0]?.message?.content ?? ''
     graded = grade(task.answerSpec, finalText)
   }
+  if (!graded.ok && graded.reason === 'unparseable-json') { stopReason = 'format-repair-exhausted'; failureClass ??= 'format' }
+  else if (repairTurns > 0 && stopReason === 'answered') stopReason = 'answered-after-format-repair'
+  if (toolArgumentError !== null && (stopReason === 'answered' || stopReason === 'answered-after-format-repair')) stopReason = 'tool-error'
+  const completionStatus = failureClass === null && (stopReason === 'answered' || stopReason === 'answered-after-format-repair') ? 'completed' : 'failed'
   return {
     taskId: task.id,
     category: task.category,
     ok: graded.ok,
     stopReason,
+    completionStatus,
+    protocolEligible: completionStatus === 'completed' && failureClass === null,
+    failureClass,
+    providerStatus: modelCallDetails.at(-1)?.providerStatus ?? null,
+    toolArgumentError,
     gradeReason: graded.ok ? null : graded.reason,
     detail: graded.ok ? undefined : { got: graded.got, want: graded.want, gotLength: graded.gotLength, wantLength: graded.wantLength },
     modelCalls,
@@ -307,6 +386,10 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
     completionTokens: usage.completion_tokens,
     totalTokens: usage.total_tokens,
     toolResultBytes,
+    providerAttempts,
+    promptSchemaTokens: modelCallDetails.reduce((sum, detail) => sum + (detail.schemaTokens ?? 0), 0),
+    toolResultTokens: tokensEst(toolResultBytes),
+    promptTokensExcludingSchema: Math.max(0, usage.prompt_tokens - modelCallDetails.reduce((sum, detail) => sum + (detail.schemaTokens ?? 0), 0)),
     ms: Math.round(performance.now() - started),
     repairTurns,
     modelCallsWithToolSchemas: modelCallDetails.filter(call => call.carriesToolSchemas).length,
@@ -332,15 +415,16 @@ async function main() {
   const preparedCorpus = await verifyCorpusTree(CORPUS_ROOT, corpusIdentity.manifest)
   const goldBytes = await readFile(GOLD_PATH)
   const goldSha256 = sha256(goldBytes)
+  const goldGuard = (body) => assertGoldIsolation({ corpusRoot: CORPUS_ROOT, goldPath: GOLD_PATH, goldBytes, goldHash: goldSha256, providerMessages: [body] })
   if (tasksDoc.sources.goldSha256 !== goldSha256) {
     throw new Error(`task set was derived from a different gold: ${tasksDoc.sources.goldSha256} != ${goldSha256}`)
   }
   const tasks = REQUESTED_TASK ? tasksDoc.tasks.filter((t) => t.id === REQUESTED_TASK) : tasksDoc.tasks
   if (tasks.length === 0) throw new Error(`no task matched ${REQUESTED_TASK}`)
 
-  // Vocabulary partition: the primary figure uses only tool-free wording; the
-  // tool-shaped remainder is reported beside it, never mixed in.
-  const NEUTRAL_IDS = new Set(tasks.filter((t) => t.vocabulary !== 'tool-shaped').map((t) => t.id))
+  // Vocabulary layers are never pooled: natural, conformance, and tool-shaped.
+  const NEUTRAL_IDS = new Set(tasks.filter((t) => t.vocabulary === 'natural').map((t) => t.id))
+  const CONFORMANCE_IDS = new Set(tasks.filter((t) => t.vocabulary === 'conformance').map((t) => t.id))
   const TOOL_SHAPED_IDS = new Set(tasks.filter((t) => t.vocabulary === 'tool-shaped').map((t) => t.id))
   const subset = (runs, ids) => ({ tasks: ids.size, ...summarizeCompletedRuns(runs, ids) })
   // Preregistered primary endpoint (doc/m5-phase2b-preregistration.md §5):
@@ -376,7 +460,7 @@ async function main() {
       repeats: schedule.map(item => ({ repeat: item.repeat, armOrder: [...item.armOrder], taskOrder: [...item.taskOrder] })),
     },
     provider: { baseUrl: BASE_URL, model: MODEL, temperature: 0, apiKeySource: API_KEY_SOURCE },
-    vocabulary: { neutral: [...NEUTRAL_IDS], toolShaped: [...TOOL_SHAPED_IDS] },
+    vocabulary: { natural: [...NEUTRAL_IDS], conformance: [...CONFORMANCE_IDS], toolShaped: [...TOOL_SHAPED_IDS] },
     arms: {},
     failures: [],
     notes: [],
@@ -434,14 +518,15 @@ async function main() {
         )
         const wireTools = toWireTools(schemas.filter((schema) => allowed.has(schema.name)))
         const systemPrompt = systemPromptForTools(SYSTEM_PREAMBLE, promptSections, [...allowed])
-        const session = ctx.sessions.prepare(ctx.evaluationHostApis.SessionId(`m5-agent-${name}`), { meta: { cwd: root } })
-        const detach = ctx.sessions.enter(session)
-        ctx.sessions.announce(session)
-        const call = makeCaller(ctx, session)
+        const warmSession = ctx.sessions.prepare(ctx.evaluationHostApis.SessionId(`m5-agent-${name}-warm`), { meta: { cwd: root } })
+        const warmDetach = ctx.sessions.enter(warmSession)
+        ctx.sessions.announce(warmSession)
+        const warmCall = makeCaller(ctx, warmSession)
         const coldStart = performance.now()
-        if (spec.structured) await call('context_repo_map', {}, `warm-${name}`)
+        if (spec.structured) await warmCall('context_repo_map', {}, `warm-${name}`)
+        warmDetach()
         armRuntimes.set(name, {
-          spec, ctx, parent, detach, provenance, promptSections, allowed, wireTools, systemPrompt, call,
+          spec, ctx, parent, provenance, promptSections, allowed, wireTools, systemPrompt, root,
           coldMs: Math.round(performance.now() - coldStart), runs: [],
         })
       } catch (error) {
@@ -458,9 +543,13 @@ async function main() {
           const task = taskById.get(taskId)
           if (task === undefined) throw new Error(`scheduled unknown task ${taskId}`)
           process.stdout.write(`[${name}] r${scheduledRepeat.repeat} ${task.id} ... `)
+          const runSession = runtime.ctx.sessions.prepare(runtime.ctx.evaluationHostApis.SessionId(`m5-agent-${name}-r${scheduledRepeat.repeat}-${task.id}`), { meta: { cwd: runtime.root } })
+          const runDetach = runtime.ctx.sessions.enter(runSession)
+          runtime.ctx.sessions.announce(runSession)
           try {
+            assertGoldIsolation({ corpusRoot: runtime.root, goldPath: GOLD_PATH, providerMessages: [{ role: 'user', content: task.question }] })
             const run = await runTask({
-              call: runtime.call,
+              call: makeCaller(runtime.ctx, runSession),
               wireTools: runtime.wireTools,
               allowed: runtime.allowed,
               task,
@@ -468,6 +557,7 @@ async function main() {
               maxModelCalls: tasksDoc.budget.maxModelCalls,
               maxToolCalls: tasksDoc.budget.maxToolCalls,
               maxOutputTokens: tasksDoc.budget.maxOutputTokens,
+              goldGuard,
             })
             run.repeat = scheduledRepeat.repeat
             runtime.runs.push(run)
@@ -475,7 +565,9 @@ async function main() {
           } catch (error) {
             console.log(`ERROR ${error?.message ?? error}`)
             report.failures.push(`${name}/${task.id}/r${scheduledRepeat.repeat}: ${error?.message ?? error}`)
-            runtime.runs.push({ taskId: task.id, category: task.category, repeat: scheduledRepeat.repeat, ok: false, stopReason: 'harness-error', gradeReason: String(error?.message ?? error), modelCallDetails: [] })
+            runtime.runs.push({ taskId: task.id, category: task.category, repeat: scheduledRepeat.repeat, ok: false, stopReason: error?.failureClass === 'timeout' ? 'provider-timeout' : 'harness-error', completionStatus: 'failed', protocolEligible: false, failureClass: error?.failureClass ?? 'harness', gradeReason: String(error?.message ?? error), modelCallDetails: [] })
+          } finally {
+            runDetach()
           }
         }
       }
@@ -489,7 +581,7 @@ async function main() {
       for (const run of runs) {
         const bucket = (byCategory[run.category] ??= { attempts: 0, completed: 0, failed: 0, correct: 0, tokens: 0, toolCalls: 0, modelCalls: 0 })
         bucket.attempts += 1
-        if (run.stopReason === 'harness-error') bucket.failed += 1
+        if (run.completionStatus !== 'completed' || run.protocolEligible === false) bucket.failed += 1
         else {
           bucket.completed += 1
           if (run.ok) bucket.correct += 1
@@ -505,6 +597,18 @@ async function main() {
       for (const run of runs) for (const [tool, count] of Object.entries(run.toolCounts ?? {})) toolCounts[tool] = (toolCounts[tool] ?? 0) + count
 
       const accuracy = summarizeCompletedRuns(runs)
+      const categoryMetrics = summarizeCategoryMetrics(runs)
+      const vocabularyMetrics = {
+        natural: { runs: runs.filter(run => taskById.get(run.taskId)?.vocabulary === 'natural') },
+        conformance: { runs: runs.filter(run => taskById.get(run.taskId)?.vocabulary === 'conformance') },
+        toolShaped: { runs: runs.filter(run => taskById.get(run.taskId)?.vocabulary === 'tool-shaped') },
+      }
+      for (const value of Object.values(vocabularyMetrics)) {
+        value.outcomes = summarizeRunOutcomes(value.runs)
+        value.taskMajority = summarizeTaskMajority(value.runs)
+        value.tokens = medianIqr(value.runs.map(run => run.totalTokens))
+        delete value.runs
+      }
       report.arms[name] = {
         label: spec.label,
         search: spec.search,
@@ -522,15 +626,25 @@ async function main() {
         promptTokens: sum('promptTokens'),
         completionTokens: sum('completionTokens'),
         toolResultBytes: sum('toolResultBytes'),
+        promptSchemaTokens: sum('promptSchemaTokens'),
+        toolResultTokens: sum('toolResultTokens'),
+        promptTokensExcludingSchema: sum('promptTokensExcludingSchema'),
         toolCalls: sum('toolCalls'),
         modelCalls: sum('modelCalls'),
         modelCallsWithToolSchemas: sum('modelCallsWithToolSchemas'),
         modelCallsWithoutToolSchemas: sum('modelCallsWithoutToolSchemas'),
         toolCounts,
         byCategory,
+        categoryMetrics,
+        outcomes: summarizeRunOutcomes(runs),
+        taskMajority: summarizeTaskMajority(runs),
+        tokenDistribution: medianIqr(runs.map(run => run.totalTokens)),
+        vocabularyMetrics,
         byVocabulary: {
-          neutral: subset(runs, NEUTRAL_IDS),
-          neutralMajority: majoritySubset(runs, NEUTRAL_IDS),
+          natural: subset(runs, NEUTRAL_IDS),
+          naturalMajority: majoritySubset(runs, NEUTRAL_IDS),
+          conformance: subset(runs, CONFORMANCE_IDS),
+          conformanceMajority: majoritySubset(runs, CONFORMANCE_IDS),
           toolShaped: subset(runs, TOOL_SHAPED_IDS),
           toolShapedMajority: majoritySubset(runs, TOOL_SHAPED_IDS),
         },
@@ -548,26 +662,41 @@ async function main() {
     }
   }
 
+  const runsByArm = Object.fromEntries(armNames.map((name) => [name, report.arms[name].detail]))
+  const armPairs = []
+  for (let treatmentIndex = 1; treatmentIndex < armNames.length; treatmentIndex += 1) {
+    for (let baselineIndex = 0; baselineIndex < treatmentIndex; baselineIndex += 1) {
+      const treatment = armNames[treatmentIndex]
+      const baseline = armNames[baselineIndex]
+      armPairs.push([`${treatment}-minus-${baseline}`, pairedBootstrap(runsByArm, treatment, baseline)])
+    }
+  }
+  report.pairedBootstrap = Object.fromEntries(armPairs)
   report.notes.push(
     'All arms share one frozen task set, one corpus copy per arm, one model, temperature 0, and identical token/tool caps.',
     'The report records the complete asserted evaluation-host module graph; startup fails before provider calls if DSH versions or Cordis/tool peer identities differ.',
     '`default` is the shipped DSH read-only retrieval surface (`read`+`grep`+`glob`); `additive` adds the structured tools; `replacement` removes `grep`/`glob` and keeps only `read` plus the structured tools.',
     'Excluded from every arm: write/edit and the rest of the dsh-base surface (bash, subagent, web, workflow, todo, skill) because they are outside retrieval.',
-    'Grading is programmatic against the frozen answerSpec; order-independent set comparison for path/name/target sets, exact equality for text and lines.',
+    'Grading is programmatic against the frozen answerSpec; set answers reject duplicate elements and require exact equality after normalization.',
     'A single repeat cannot detect small accuracy differences; token/tool-call differences are the more sensitive signal at low N.',
+    `Provider requests use AbortController with a configurable ${PROVIDER_TIMEOUT_MS}ms timeout and ${PROVIDER_ATTEMPT_BUDGET}-attempt budget; every HTTP attempt records status, retryability, and duration.`,
+    'Provider, timeout, budget, tool, format, and harness failures are classified separately; intention-to-treat, completed, and per-protocol summaries are all reported while legacy attempts/completed/failed fields remain.',
     'Provider/harness errors are reported as failed attempts and excluded from completed-run accuracy denominators.',
+    'Each arm×task×repeat receives a fresh Session and runtime binding; warm indexing is done only in a disposable warm session.',
+    'Gold isolation is checked before each provider request; gold remains grading-only and outside every mounted corpus.',
+    'Schema, tool-result, and non-schema prompt token estimates are reported separately; estimates use ceil(UTF-8 bytes/4), not a provider tokenizer.',
     'Structured arms share one index per arm, while sessionSourceBytes=null prevents source reads in earlier tasks from consuming a later task\'s evaluation capacity.',
     'Every copied corpus tree is verified against the locked per-file manifest before its arm is mounted.',
     'Full comparisons use a cyclic Latin-square arm order across repeats; each repeat applies one frozen-seed deterministic task permutation shared by all arms.',
     'Each model call records whether tool schemas were sent; JSON repair preserves the same schemas with tool_choice=none.',
     'The system prompt is the arm-neutral preamble plus the product\'s own registered sections for exactly the tools that arm exposes, so no arm is told about a tool it cannot call.',
-    'The primary accuracy figure is `byVocabulary.neutral`; `byVocabulary.toolShaped` covers tasks whose wording still depends on the tested tool\'s request model and is reported as a diagnostic only.',
-    'The preregistered primary endpoint is `byVocabulary.neutralMajority` / `toolShapedMajority`: per-task majority vote across repeats, then averaged over tasks (doc/m5-phase2b-preregistration.md §5). `byVocabulary.neutral` is the older run-pooled figure and is kept only for continuity with already-published reports.',
+    'Tasks are partitioned into natural, conformance, and tool-shaped layers; each layer reports protocol accuracy, task majority, and token distribution independently.',
+    'The primary endpoint is natural.taskMajority; legacy byVocabulary fields remain for compatibility only. Natural, conformance, and tool-shaped layers are never pooled.'
   )
 
   report.finishedAt = new Date().toISOString()
   report.ok = report.failures.length === 0
-  report.primaryEndpoint = 'byVocabulary.neutralMajority (per-task majority across repeats, averaged over tasks)'
+  report.primaryEndpoint = 'vocabularyMetrics.natural.taskMajority (per-task majority across repeats, protocol-eligible runs only)'
   await mkdir(REPORT_DIR, { recursive: true })
   await mkdir(dirname(OUT_PATH), { recursive: true })
   await writeFile(OUT_PATH, `${JSON.stringify(report, null, 2)}\n`)
@@ -575,8 +704,8 @@ async function main() {
   for (const [name, arm] of Object.entries(report.arms)) {
     console.log(
       `${name.padEnd(12)} ${arm.correct}/${arm.completed} completed (${arm.failed} failed)  ` +
-        `neutral ${arm.byVocabulary.neutral.correct}/${arm.byVocabulary.neutral.completed} pooled | ` +
-        `neutral-majority ${arm.byVocabulary.neutralMajority.correct}/${arm.byVocabulary.neutralMajority.evaluated} PRIMARY  ` +
+        `natural ${arm.byVocabulary.natural.correct}/${arm.byVocabulary.natural.completed} pooled | ` +
+        `natural-majority ${arm.byVocabulary.naturalMajority.correct}/${arm.byVocabulary.naturalMajority.evaluated} PRIMARY  ` +
         `${arm.byVocabulary.toolShaped.attempts ? `tool-shaped ${arm.byVocabulary.toolShaped.correct}/${arm.byVocabulary.toolShaped.completed} completed  ` : ''}` +
         `tokens=${arm.totalTokens}  toolCalls=${arm.toolCalls}  modelCalls=${arm.modelCalls}`,
     )

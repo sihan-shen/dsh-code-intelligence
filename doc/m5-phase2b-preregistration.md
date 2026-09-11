@@ -1,5 +1,7 @@
 # M5 Phase 2b 预注册（公平性修复后重跑）
 
+> **后续审计修订（不回写历史结果）**：历史主终点 `neutral` 仅适用于当时的 v2 报告，且其准确率结论已撤销。当前 harness 使用 `natural`、`conformance`、`tool-shaped` 三层，要求 `completionStatus=completed` 且 `protocolEligible=true` 才进入 completed/majority；并行输出 ITT、protocol、category macro、token median/IQR 和全部 treatment-minus-baseline pairwise bootstrap。当前修订未运行 provider，不能产生新的效果数字。
+
 > 本文件在**任何模型调用之前**写就并冻结。任何在此之后的改动都必须作为新的版本追加，不能回改本节。
 
 | 项 | 值 |

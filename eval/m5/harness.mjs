@@ -18,7 +18,8 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { cp, readdir, readFile, realpath } from 'node:fs/promises'
-import { dirname, join, relative, sep } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { dirname, join, relative, sep, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -119,6 +120,117 @@ export function createAgentRunSchedule({ armNames, taskIds, repeats, seed = DEFA
 export const tokensEst = (bytes) => Math.ceil(bytes / 4)
 export const exists = (path) => readFile(path).then(() => true, () => false)
 
+/** Failure classes are intentionally stable report vocabulary, not Error names. */
+export const FAILURE_CLASSES = Object.freeze(['provider', 'timeout', 'budget', 'tool', 'format', 'harness'])
+
+/**
+ * Verify that evaluation inputs cannot be mounted as provider-visible files.
+ * Gold is grading-only: it must not be the corpus, a child of the corpus, or a
+ * path mentioned in a provider request. This is a fail-closed guard rather
+ * than a claim that an external provider cannot already know a public answer.
+ */
+export function assertGoldIsolation({ corpusRoot, goldPath, providerMessages = [], goldBytes = null, goldHash = null }) {
+  const corpus = resolve(String(corpusRoot ?? ''))
+  const gold = resolve(String(goldPath ?? ''))
+  if (!corpus || !gold) throw new TypeError('corpusRoot and goldPath are required')
+  const corpusPrefix = corpus.endsWith(sep) ? corpus : `${corpus}${sep}`
+  if (gold === corpus || gold.startsWith(corpusPrefix)) throw new Error('gold path must not be inside the provider-visible corpus')
+  const aliases = new Set([gold, GOLD_PATH, gold.replaceAll(sep, '/'), GOLD_PATH.replaceAll(sep, '/')])
+  for (const candidate of [gold, GOLD_PATH]) {
+    try { aliases.add(realpathSync.native(candidate)) } catch { /* path may be synthetic in unit tests */ }
+  }
+  const serialized = JSON.stringify(providerMessages)
+  const canonicalSerialized = serialized.replaceAll('\\\\', '/').replaceAll('%2F', '/').replaceAll('%2f', '/')
+  if ([...aliases].some(alias => canonicalSerialized.includes(alias))) throw new Error('provider request contains the grading-only gold path')
+  const digest = goldHash ?? (goldBytes === null ? null : sha256(goldBytes))
+  if (digest && canonicalSerialized.includes(digest)) throw new Error('provider request contains the grading-only gold fingerprint')
+  if (goldBytes !== null && canonicalSerialized.includes(Buffer.from(goldBytes).toString('utf8'))) throw new Error('provider request contains grading-only gold content')
+  return true
+}
+
+/** A formal cross-corpus claim requires independent corpus identities. */
+export function assertGeneralizationEligible(corpora) {
+  if (!Array.isArray(corpora) || corpora.length < 2) {
+    throw new Error('formal generalization requires at least two independent corpora')
+  }
+  const identities = new Set()
+  const families = new Set()
+  for (const corpus of corpora) {
+    if (!corpus || typeof corpus.id !== 'string' || typeof corpus.commit !== 'string' || typeof corpus.language !== 'string' || typeof corpus.framework !== 'string') {
+      throw new Error('each corpus requires id, commit, language, and framework')
+    }
+    const identity = `${corpus.id}:${corpus.commit}`
+    if (identities.has(identity)) throw new Error(`duplicate corpus identity: ${identity}`)
+    identities.add(identity)
+    families.add(`${corpus.language}:${corpus.framework}`)
+    if (corpus.deduplicated !== true || corpus.independenceVerified !== true) {
+      throw new Error(`corpus ${corpus.id} lacks deduplication/independence verification`)
+    }
+  }
+  if (families.size < 2) throw new Error('formal generalization requires multiple language/framework families')
+  return Object.freeze({ corpusCount: corpora.length, families: [...families].sort(), eligible: true })
+}
+
+export function isProtocolCompleted(run) {
+  // Reports produced before schemaVersion 2 have no explicit status. Preserve
+  // their historical denominator while making all new records fail closed.
+  if (run?.completionStatus === undefined && run?.protocolEligible === undefined) {
+    return !['harness-error', 'provider-error', 'provider-timeout', 'timeout'].includes(run?.stopReason)
+  }
+  return run?.completionStatus === 'completed' && run?.protocolEligible === true
+}
+
+/** Protocol-aware summary; explicit completion/protocol eligibility is required. */
+export function summarizeRunOutcomes(runs, taskIds) {
+  const selected = taskIds === undefined ? runs : runs.filter(run => taskIds.has(run.taskId))
+  const completed = selected.filter(isProtocolCompleted)
+  const byFailure = Object.fromEntries(FAILURE_CLASSES.map(kind => [kind, selected.filter(run => run.failureClass === kind).length]))
+  const correct = selected.filter(run => run.ok).length
+  const protocolCorrect = completed.filter(run => run.ok).length
+  return {
+    intentionToTreat: { attempts: selected.length, correct, correctRate: selected.length ? Number((correct / selected.length).toFixed(4)) : null },
+    completed: { attempts: completed.length, correct: protocolCorrect, correctRate: completed.length ? Number((protocolCorrect / completed.length).toFixed(4)) : null },
+    perProtocol: { attempts: completed.length, correct: protocolCorrect, correctRate: completed.length ? Number((protocolCorrect / completed.length).toFixed(4)) : null },
+    failures: byFailure,
+  }
+}
+
+export function medianIqr(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (!sorted.length) return { count: 0, median: null, q1: null, q3: null, iqr: null }
+  const quantile = (p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))]
+  return { count: sorted.length, median: quantile(0.5), q1: quantile(0.25), q3: quantile(0.75), iqr: quantile(0.75) - quantile(0.25) }
+}
+
+export function summarizeCategoryMetrics(runs) {
+  const categories = [...new Set(runs.map(run => run.category).filter(Boolean))].sort()
+  const byCategory = Object.fromEntries(categories.map(category => {
+    const subset = runs.filter(run => run.category === category)
+    const outcome = summarizeRunOutcomes(subset)
+    return [category, { ...outcome, taskMajority: summarizeTaskMajority(subset), tokens: medianIqr(subset.map(run => run.totalTokens)) }]
+  }))
+  const rates = Object.values(byCategory).map(value => value.perProtocol.correctRate).filter(value => value !== null)
+  return { byCategory, macroAverage: rates.length ? Number((rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(4)) : null }
+}
+
+/** Deterministic cluster bootstrap over task-level paired differences. */
+export function pairedBootstrap(runsByArm, treatment, baseline = 'default', { iterations = 1000, seed = 'm5-bootstrap-v1' } = {}) {
+  const leftRuns = runsByArm[treatment] ?? []
+  const rightRuns = runsByArm[baseline] ?? []
+  const taskIds = [...new Set([...leftRuns, ...rightRuns].map(run => run.taskId))].sort()
+  const mean = (runs, id) => { const values = runs.filter(run => run.taskId === id && run.protocolEligible !== false).map(run => run.ok ? 1 : 0); return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null }
+  const differences = taskIds.map(id => [mean(leftRuns, id), mean(rightRuns, id)]).filter(([a, b]) => a !== null && b !== null).map(([a, b]) => a - b)
+  if (!differences.length) return { treatment, baseline, direction: 'treatment-minus-baseline', tasks: 0, iterations: 0, difference: null, ci95: [null, null] }
+  const random = seededRandom(seed)
+  const estimates = Array.from({ length: iterations }, () => {
+    let total = 0
+    for (let i = 0; i < differences.length; i += 1) total += differences[Math.floor(random() * differences.length)]
+    return total / differences.length
+  }).sort((a, b) => a - b)
+  const at = (p) => estimates[Math.min(estimates.length - 1, Math.floor(p * estimates.length))]
+  return { treatment, baseline, direction: 'treatment-minus-baseline', tasks: differences.length, iterations, difference: Number((differences.reduce((a, b) => a + b, 0) / differences.length).toFixed(4)), ci95: [Number(at(0.025).toFixed(4)), Number(at(0.975).toFixed(4))] }
+}
+
 async function manifestFiles(root) {
   const files = []
   async function visit(directory) {
@@ -203,7 +315,7 @@ export async function loadCorpusManifest() {
 /** Accuracy summary that excludes infrastructure/provider failures. */
 export function summarizeCompletedRuns(runs, taskIds) {
   const selected = taskIds === undefined ? runs : runs.filter(run => taskIds.has(run.taskId))
-  const completed = selected.filter(run => run.stopReason !== 'harness-error')
+  const completed = selected.filter(isProtocolCompleted)
   const failed = selected.length - completed.length
   const correct = completed.filter(run => run.ok).length
   return {
@@ -227,7 +339,7 @@ export function summarizeTaskMajority(runs, taskIds) {
   const byTask = new Map()
   for (const run of selected) {
     const bucket = byTask.get(run.taskId) ?? { taskId: run.taskId, completed: 0, correct: 0 }
-    if (run.stopReason !== 'harness-error') {
+    if (isProtocolCompleted(run)) {
       bucket.completed += 1
       if (run.ok) bucket.correct += 1
     }

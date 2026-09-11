@@ -45,6 +45,12 @@
 - **E4 已满足（Task 5）**：发布候选在 Node `v22.19.0` 与 `v24.6.0` 上复跑 —— `tsc -b`、`tsdown`、全量 `vitest run`（27 files / 246 tests）、真实仓验收 runner（1 file / 5 tests，20/20 gold）全部通过；真实仓首次全量索引 286 文件完整、10,052 symbols / 11,042 relationships，两版 Node 得到相同 snapshotId `sha256:aade882c…`；干净 consumer 安装矩阵通过。本轮修复 F1（补 `lib/index.js.map` 到 `files`）与 F2（built-entry smoke 测试超时）。独立只读代理完成对抗式验证，未发现阻塞项，但提出 4 项证据追溯问题（tree-wide 唯一性脚本含死代码、部分数字无留存产物、验证报告悬空指针、AST 输出未留存）；父代理已逐项修复并留存：全 corpus 286 文件 compiler tree-wide 扫描（8/8 目标计数符合）、`verify-gold-ast.log`、`acceptance-result-host.json`、`independent-verification.md` 与 `independent-verification-addendum.md`。
 - **收益状态：`not-ready`**。尚未执行 Baseline/C pilot，不宣称检索、token、成本、时延或 coding-task 收益。
 
+## M5 eval 审计修复（未运行付费 provider）
+
+已修复 Phase 2 harness 的关键偏差与可审计性问题：provider 请求具有有界 timeout、408/429/5xx 重试和明确的 attempt budget；每次 HTTP attempt 保留 status/retryability/duration。新的报告只把 `completionStatus=completed` 且 `protocolEligible=true` 纳入 completed/majority（旧报告记录仍兼容），并同时报告 ITT 与 protocol 口径。三臂分别输出 treatment-minus-baseline 的 task-cluster bootstrap；tool result token 去重，集合答案拒绝重复元素；task generator 及冻结 JSON 使用 `natural`/`conformance`/`tool-shaped` 三层，分别报告 protocol accuracy、task majority、category macro 与 token median/IQR。最终 chat body 发送前执行 canonical gold path/hash/content 指纹防泄漏检查。
+
+本次只运行静态 node check、任务生成器、定向 Vitest 和 diff 检查，未调用任何付费 provider。历史 Phase 2 v1 准确率结论保持撤销；单一 TypeScript corpus、gold-derived tasks 与饱和样本仍不支持泛化或 SWE 收益结论。
+
 ## 附属试点：默认检索（grep）基线（不计入 M5 验收）
 
 为后续收益评估预置基线，额外跑了一轮**无模型**的静态检索对照，预登记探针冻结于

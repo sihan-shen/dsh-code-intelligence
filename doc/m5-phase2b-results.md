@@ -1,4 +1,6 @@
-# M5 Phase 2b 结果（公平性修复后的重跑）
+# M5 Phase 2b 结果（公平性修复后的历史重跑）
+
+> **解释边界**：以下历史运行是在本次 protocol/timeout/分层审计改动前完成的；数字不得被当作修复后 harness 的新结果。v1 准确率结论已撤销，当前样本不支持通用泛化或 SWE/coding 收益。
 
 > **历史结果说明**：以下数字来自 session/corpus/计数审计增强之前的运行，未因后续 harness
 > 修复而重算。旧运行跨题复用了一个 Session source budget、未逐臂验证 corpus 副本，且固定按
@@ -36,10 +38,10 @@
 >
 > **主终点口径**：下表 "v2 准确率（360 次运行）" 列是**运行级池化**，而且把两轮复制合并计数；
 > 预注册 §5 的主终点是**单轮 N=3 内按任务多数票**，§7 又规定两轮复制不得合并。按冻结的单轮
-> 口径分别重算，`agent-comparison-v2.json` 与首轮 `agent-comparison-v2-run1.json` 各自 neutral
+> 口径分别重算，`agent-comparison-v2.json` 与首轮 `agent-comparison-v2-run1.json` 各自按历史 neutral 子集
 > 子集（19 题）三臂均为 **19/19 = 100.0%**；round-2 `default` 的池化 56/57 只来自 `decl-01`
 > 在 3 次中失败 1 次（2/3，其任务多数票仍正确，与上表 "任务多数票 20/20" 一致）。修复后的
-> `agent-baseline.mjs` 输出 `byVocabulary.neutralMajority` 作为主终点。
+> 历史 `agent-baseline.mjs` 输出 `byVocabulary.neutralMajority` 作为主终点；当前 harness 改为 natural/conformance/tool-shaped 分层，并以 `vocabularyMetrics.natural.taskMajority` 为主终点。
 
 把 9 个使用被测工具自用语汇的提问改成普通话术后：
 
