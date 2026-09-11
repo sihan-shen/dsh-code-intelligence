@@ -9,150 +9,65 @@
 // NEVER writes gold. Probes are frozen in `baseline-grep.patterns.json`; their
 // sha256 is recorded in the report. Run:  node eval/m5/grep-baseline.mjs
 //
-// The subprocess seam is the one documented seam replaced here: ripgrep argv
-// construction, execution, parsing, caps, retention, and model-facing rendering
-// are all the real `dsh-tool-fs-search` code.
+// The subprocess seam is replaced by the shared harness shim in `./harness.mjs`:
+// ripgrep argv construction, execution, parsing, caps, retention, and model-facing
+// rendering are all the real `dsh-tool-fs-search` code. The host (cordis,
+// session store, tool runtime, storage, workspace, sandbox, fs) is likewise
+// sourced from one asserted profile graph so this baseline cannot drift from
+// the Phase 2/3 runs.
 
-import { createHash } from 'node:crypto'
-import { spawn } from 'node:child_process'
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { Context } from '@deepseek-ai/cordis'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { apply as codeIntelligenceApply } from '../../lib/index.js'
+import { fileURLToPath } from 'node:url'
+import {
+  COMMIT,
+  CORPUS_ROOT,
+  EVALUATION_CODE_INTELLIGENCE_CONFIG,
+  GOLD_PATH,
+  GREP_TOOL_NAMES,
+  STRUCTURED_TOOL_NAMES,
+  contentBytes,
+  contentText,
+  expectedTargetTokens,
+  lineStarts,
+  loadCodeIntelligence,
+  loadCorpusManifest,
+  loadFsSearch,
+  makeCaller,
+  makeRegistry,
+  mountCorpus,
+  mountRetrievalTools,
+  relationTargetTokens,
+  sha256,
+  tokensSurfaced,
+} from './harness.mjs'
 
 const PKG_ROOT = fileURLToPath(new URL('../../', import.meta.url))
-const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 
-// This harness AUTHORS no dependency edge on the measured tool: it imports the
-// real `@deepseek-ai/dsh-tool-fs-search` bundle as it is already installed in
-// this workspace (it is a transitive dependency of the DSH base profile). That
-// keeps the baseline run from rewriting the shared root lockfile. Set
-// `DSH_FS_SEARCH_ENTRY` to override the located bundle.
-async function findFsSearchEntry() {
-  const candidates = [
-    process.env.DSH_FS_SEARCH_ENTRY,
-    join(PKG_ROOT, 'node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js'),
-    join(REPO_ROOT, '.dsh/profiles/node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js'),
-  ].filter((value) => typeof value === 'string' && value.length > 0)
-  for (const candidate of candidates) {
-    if (await readFile(candidate).then(() => true, () => false)) return candidate
-  }
-  const store = join(REPO_ROOT, 'node_modules/.pnpm')
-  const dirs = await readdir(store).catch(() => [])
-  for (const dir of dirs.filter((d) => d.startsWith('@deepseek-ai+dsh-tool-fs-search@')).sort()) {
-    const entry = join(store, dir, 'node_modules/@deepseek-ai/dsh-tool-fs-search/lib/index.js')
-    if (await readFile(entry).then(() => true, () => false)) return entry
-  }
-  throw new Error('cannot locate @deepseek-ai/dsh-tool-fs-search; set DSH_FS_SEARCH_ENTRY to its lib/index.js')
-}
+// This harness sources all DSH host components from one asserted profile graph,
+// the same host the Phase 2/3 scripts use (see `./harness.mjs`). It authors no
+// dependency edge on the measured tool: `loadFsSearch()` imports the already
+// installed profile bundle, so running the baseline cannot rewrite the shared
+// root lockfile.
 
-const FS_SEARCH_ENTRY = await findFsSearchEntry()
-const fsSearch = await import(pathToFileURL(FS_SEARCH_ENTRY).href)
-
-const CORPUS_ROOT = join(PKG_ROOT, 'node_modules/.cache/m5-eval/corpus/zod-1fb56a5c18c27102dbc92260a4007c7732a0ccca/packages/zod/src')
-const COMMIT = '1fb56a5c18c27102dbc92260a4007c7732a0ccca'
-const GOLD_PATH = fileURLToPath(new URL('./gold.json', import.meta.url))
 const PROBES_PATH = fileURLToPath(new URL('./baseline-grep.patterns.json', import.meta.url))
 const REPORT_DIR = join(PKG_ROOT, 'node_modules/.cache/m5-eval/reports')
-const REPORT_PATH = join(REPORT_DIR, 'baseline-grep.json')
-const GREP_TOOL_NAMES = ['grep', 'glob']
-const STRUCTURED_TOOL_NAMES = ['context_repo_map', 'context_symbol_query', 'context_relation_query', 'context_expand_source', 'context_refresh_snapshot']
+// `--out <path>` keeps ad-hoc verification runs out of the cached historical
+// report directory; the default stays the committed evidence path.
+const OUT_FLAG = process.argv.indexOf('--out')
+if (OUT_FLAG >= 0 && (process.argv[OUT_FLAG + 1] === undefined || process.argv[OUT_FLAG + 1].startsWith('--'))) {
+  throw new Error('--out requires a file path')
+}
+const REPORT_PATH = OUT_FLAG >= 0
+  ? process.argv[OUT_FLAG + 1]
+  : join(REPORT_DIR, 'baseline-grep.json')
 
-const sha256 = (value) => createHash('sha256').update(value).digest('hex')
 const tokensEst = (bytes) => Math.ceil(bytes / 4)
-const exists = (path) => readFile(path).then(() => true, () => false)
-
-// ---------------------------------------------------------------------------
-// Subprocess seam shim (real spawn; only capture/termination is reimplemented).
-// ---------------------------------------------------------------------------
-
-function makeRetainer(maxBytes) {
-  const chunks = []
-  let size = 0
-  let lossy = false
-  return {
-    push(buf) {
-      if (size >= maxBytes) { lossy = true; return }
-      const remain = maxBytes - size
-      if (buf.length > remain) { chunks.push(buf.subarray(0, remain)); size += remain; lossy = true }
-      else { chunks.push(buf); size += buf.length }
-    },
-    readFrom() { return { text: Buffer.concat(chunks).toString('utf8'), lossy, bytes: size } },
-  }
-}
-
-function makeSubprocessShim() {
-  return {
-    spawn({ argv, cwd, stdio, signal }) {
-      const [command, ...args] = argv
-      const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-      const out = makeRetainer(stdio?.stdout?.maxBytes ?? 1 << 30)
-      const err = makeRetainer(stdio?.stderr?.maxBytes ?? 1 << 20)
-      child.stdout.on('data', (b) => out.push(b))
-      child.stderr.on('data', (b) => err.push(b))
-      signal?.addEventListener('abort', () => child.kill('SIGKILL'), { once: true })
-      const done = new Promise((resolve, reject) => {
-        child.once('error', reject)
-        child.once('close', (exitCode, sig) => resolve({ exitCode, signal: sig }))
-      })
-      return { done, collected: { stdout: out, stderr: err } }
-    },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Real ToolRuntime + Storage + Workspace + SessionStore (mirrors acceptance).
-// ---------------------------------------------------------------------------
-
-function memoryBackend() {
-  const units = new Map()
-  return { kv: { async open(descriptor) {
-    let state = units.get(descriptor.name)
-    if (!state) { state = { tables: new Map(descriptor.tables.map((t) => [t, new Map()])), global: null }; units.set(descriptor.name, state) }
-    return {
-      async loadAll() { return { tables: Object.fromEntries([...state.tables].map(([n, r]) => [n, Object.fromEntries(r)])), global: state.global } },
-      async putRecord(table, key, value) { state.tables.get(table).set(key, value) },
-      async deleteRecord(table, key) { state.tables.get(table).delete(key) },
-      async setGlobal(value) { state.global = value },
-      async close() {},
-    }
-  } }, async close() {} }
-}
-
-async function makeRegistry() {
-  const ctx = new Context()
-  ctx.provide('typert', { lookups: { register() { return () => {} } } })
-  ctx.provide('systemPrompt', { tools() { return () => {} }, section() { return () => {} }, getSectionOrder() { return 0 } })
-  ctx.provide('subprocess', makeSubprocessShim())
-  await ctx.plugin(SessionStore)
-  await ctx.plugin(ToolRuntime, { mode: 'native' })
-  const storage = await import('@deepseek-ai/dsh-storage')
-  const domain = await import('@deepseek-ai/dsh-storage-domain')
-  const workspace = await import('@deepseek-ai/dsh-workspace')
-  await ctx.plugin(storage.Storage)
-  const backend = memoryBackend()
-  ctx.storage.backend.register('memory', backend)
-  ctx.provide('storage.backend.memory', backend)
-  await ctx.plugin({ name: domain.name, inject: [...domain.inject, 'storage.backend.memory'], Config: domain.Config, apply: domain.apply }, { backend: 'memory' })
-  ctx.provide('sessionPersistence', { async list() { return [] } })
-  await ctx.plugin(workspace.WorkspaceRegistry)
-  return ctx
-}
 
 // ---------------------------------------------------------------------------
 // Scoring helpers.
 // ---------------------------------------------------------------------------
-
-function lineStarts(text) {
-  const starts = [0]
-  for (let i = 0; i < text.length; i += 1) if (text.charCodeAt(i) === 10) starts.push(i + 1)
-  return starts
-}
 
 // grep matches are line-granular: a hit counts as inside a span when the hit
 // line's [start,end) overlaps the span's [startOffset,endOffset).
@@ -164,15 +79,16 @@ function matchOverlapsSpan(match, span, lines) {
 }
 
 function expectedTokens(sample) {
-  if (sample.category === 'declaration') return sample.expectedTargets.map((t) => t.name)
-  if (sample.category !== 'relation') return []
-  if (sample.relationKind === 'symbol') return sample.expected.targets.map((t) => t.name)
-  return sample.expected.map((edge) => edge.target?.specifier ?? edge.target?.name ?? edge.target?.path).filter((v) => typeof v === 'string')
+  return expectedTargetTokens(sample)
 }
 
 // ---------------------------------------------------------------------------
 // Main.
 // ---------------------------------------------------------------------------
+
+// Resolve the measured grep bundle from the asserted single-profile host. The
+// whole host graph is asserted before any corpus/provider work (see harness).
+const { module: fsSearch, entry: FS_SEARCH_ENTRY, provenance: evaluationHostProvenance } = await loadFsSearch()
 
 const report = {
   schemaVersion: 1,
@@ -182,12 +98,14 @@ const report = {
   node: process.version,
   corpusCommit: COMMIT,
   corpusRoot: CORPUS_ROOT,
+  evaluationHostGeneration: evaluationHostProvenance.generation,
   goldSha256: sha256(await readFile(GOLD_PATH)),
   probesSha256: sha256(await readFile(PROBES_PATH)),
   grepTool: {
     package: fsSearch.name,
     entry: FS_SEARCH_ENTRY,
-    version: JSON.parse(await readFile(join(dirname(FS_SEARCH_ENTRY), '..', 'package.json'), 'utf8')).version,
+    version: evaluationHostProvenance.modules['dsh-tool-fs-search'].version,
+    generation: evaluationHostProvenance.generation,
     inject: fsSearch.inject,
     engine: '@vscode/ripgrep',
   },
@@ -209,6 +127,9 @@ const tempDirs = []
 try {
   const gold = JSON.parse(await readFile(GOLD_PATH, 'utf8'))
   const probes = JSON.parse(await readFile(PROBES_PATH, 'utf8'))
+  report.probeSchemaVersion = probes.schemaVersion
+  report.probeRevision = probes.revision ?? null
+  report.scoring = 'symmetric-target-coverage-v2'
   const goldById = new Map(gold.samples.map((s) => [s.id, s]))
   const probeIds = probes.probes.map((p) => p.id)
   const goldIds = gold.samples.map((s) => s.id)
@@ -217,31 +138,27 @@ try {
   }
 
   const ctx = await makeRegistry()
-  cleanup.push(() => ctx.dispose())
+  cleanup.push(() => ctx.fiber.dispose())
   const parent = await mkdtemp(join(tmpdir(), 'm5-grepbase-'))
   tempDirs.push(parent)
   const root = join(parent, 'src')
-  await cp(CORPUS_ROOT, root, { recursive: true })
+  const corpusIdentity = await loadCorpusManifest()
+  report.corpusLockSha256 = corpusIdentity.lockSha256
+  report.corpusManifestSha256 = corpusIdentity.manifestSha256
 
-  const workspaces = ctx.get('workspaceRegistry')
-  await workspaces.create(root)
-
+  const corpusMountStart = performance.now()
+  // Mounts the shared retrieval stack (fs-sandbox policy + the real
+  // `dsh-tool-fs-search` bundle) and adds the copied corpus to the workspace
+  // registry; the copy is byte-verified against the frozen manifest.
+  await mountCorpus(ctx, root, corpusIdentity.manifest)
+  report.corpusMountMs = Math.round(performance.now() - corpusMountStart)
   const grepStartup = performance.now()
-  await ctx.plugin(fsSearch, {
-    sampleOverCapGlobResults: false,
-    globMaxResults: fsSearch.GLOB_MAX_RESULTS,
-    grepMaxMatches: fsSearch.GREP_MAX_MATCHES,
-    grepMaxLineBytes: fsSearch.GREP_MAX_LINE_BYTES,
-    searchMetaMaxBytes: fsSearch.SEARCH_META_MAX_BYTES,
-    rawOutputMaxBytes: fsSearch.RAW_OUTPUT_MAX_BYTES,
-    graceMs: fsSearch.SEARCH_GRACE_MS,
-    stderrMaxBytes: fsSearch.SEARCH_STDERR_MAX_BYTES,
-    timeoutMs: fsSearch.SEARCH_TIMEOUT_MS,
-  })
+  await mountRetrievalTools(ctx, root, { includeSearch: true, fsSearch })
   // grep indexes nothing up front; it pays per call.
   report.grepStartupMs = Math.round(performance.now() - grepStartup)
   const structuredStartup = performance.now()
-  await ctx.plugin(codeIntelligenceApply, { deploymentRoot: '.', revision: COMMIT })
+  const codeIntel = await loadCodeIntelligence()
+  await ctx.plugin(codeIntel.apply, EVALUATION_CODE_INTELLIGENCE_CONFIG)
   // The structured plugin loads lazily; the whole-corpus index is built on the
   // first query, so report the plugin load separately from the cold query.
   report.structuredPluginLoadMs = Math.round(performance.now() - structuredStartup)
@@ -250,18 +167,12 @@ try {
     if (!ctx.tools.get(name)) throw new Error(`tool not registered: ${name}`)
   }
 
-  const session = ctx.sessions.prepare(SessionId('m5-grep-baseline'), { meta: { cwd: root } })
+  const session = ctx.sessions.prepare(ctx.evaluationHostApis.SessionId('m5-grep-baseline'), { meta: { cwd: root } })
   const detach = ctx.sessions.enter(session)
   cleanup.push(detach)
   ctx.sessions.announce(session)
 
-  const call = (name, args, agent) => ctx.tools.execute({
-    callId: ToolCallId(`${name}-${agent}`), name, arguments: args, signal: new AbortController().signal,
-    agent: { id: agent, session },
-  })
-
-  const contentBytes = (result) => result.content.reduce((n, block) => n + (block.type === 'text' ? Buffer.byteLength(block.text, 'utf8') : 0), 0)
-  const contentText = (result) => result.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')
+  const call = makeCaller(ctx, session)
 
   const linesCache = new Map()
   const linesFor = async (path) => {
@@ -310,6 +221,8 @@ try {
     let firstMatchIsTarget = null
     let sortedFirstIsTarget = null
     let fileBytes
+    const want = expectedTokens(sample)
+    const found = tokensSurfaced(grepText, want)
     if (sample.category === 'declaration') {
       targetsTotal = sample.expectedTargets.length
       const overlapsAny = async (match) => {
@@ -336,20 +249,20 @@ try {
     } else if (sample.relationKind === 'symbol') {
       const span = sample.expected.source
       const lines = await linesFor(span.path)
-      targetsTotal = sample.expected.targets.length
-      located = matches.some((m) => m.path === span.path && matchOverlapsSpan(m, span, lines))
-      targetsHit = located ? 1 : 0
+      // Symmetric requirement: surface every expected target name. grep can only
+      // line-match the containing statement, so nested member names usually stay
+      // hidden; that is an honest grep limitation, not a scoring freebie.
+      targetsTotal = want.length
+      targetsHit = found.length
+      located = want.length > 0 && found.length === want.length
       firstMatchIsTarget = matches.length > 0 ? (matches[0].path === span.path && matchOverlapsSpan(matches[0], span, lines)) : null
     } else {
-      const path = sample.request.from.path
-      targetsTotal = sample.expected.length
-      // A zero-edge relation is answered correctly by finding no matches.
-      located = targetsTotal === 0 ? matches.length === 0 : matches.some((m) => m.path === path)
-      targetsHit = targetsTotal === 0 ? (located ? 1 : 0) : (located ? 1 : 0)
+      // File relation: same token-coverage rule the structured arm uses below; a
+      // zero-edge relation is answered by surfacing no matches.
+      targetsTotal = want.length
+      targetsHit = found.length
+      located = want.length === 0 ? matches.length === 0 : found.length === want.length
     }
-
-    const want = expectedTokens(sample)
-    const found = want.filter((token) => grepText.includes(token))
 
     entry.grep = {
       pattern: probe.grep.pattern, path: probe.grep.path ?? null,
@@ -363,18 +276,22 @@ try {
     // ---- structured arm ----
     let structuredArgs
     let structuredPrecallMs = 0
+    let structuredPrecallBytes = 0
     if (sample.category === 'declaration') structuredArgs = { name: 'context_symbol_query', args: { snapshotId, ...sample.request } }
     else if (sample.category === 'relation') {
       let from = sample.request.from
       if (sample.relationKind === 'symbol') {
         // The public relation tool takes a symbolId or a path; the task input names
         // the symbol, so the structured arm must first resolve it like an agent would.
+        // Its latency AND its model-facing bytes are charged to the structured arm:
+        // the lookup is an extra round trip grep does not need.
         const lookupStart = performance.now()
         const lookup = await call('context_symbol_query', {
           snapshotId, name: from.symbolName, mode: 'exact', kind: from.symbolKind, pathPrefix: from.symbolPrefix,
         }, `ctx-lookup-${probe.id}`)
         structuredPrecallMs = performance.now() - lookupStart
         if (lookup.isError) throw new Error(`symbol lookup failed for ${probe.id}: ${lookup.error.message}`)
+        structuredPrecallBytes = contentBytes(lookup)
         from = { symbolId: lookup.value.matches[0].symbolId }
       }
       structuredArgs = { name: 'context_relation_query', args: { snapshotId, from, types: sample.request.types } }
@@ -390,16 +307,44 @@ try {
     const structuredStart = performance.now()
     const structuredResult = await call(structuredArgs.name, structuredArgs.args, `ctx-${probe.id}`)
     const structuredMs = Math.round(performance.now() - structuredStart + structuredPrecallMs)
-    const structuredBytes = contentBytes(structuredResult)
+    const structuredBytes = contentBytes(structuredResult) + structuredPrecallBytes
 
     let structuredOk = !structuredResult.isError
-    if (structuredOk && sample.category === 'declaration') structuredOk = structuredResult.value.matches.length === sample.expectedTargets.length
+    let structuredTargetsHit = null
+    let structuredTargetsTotal = null
+    if (structuredOk && sample.category === 'declaration') {
+      // Coverage, not count: every expected declaration must come back at its
+      // own path with its own name, so a same-length wrong answer fails.
+      const returned = structuredResult.value.matches ?? []
+      structuredTargetsTotal = sample.expectedTargets.length
+      structuredTargetsHit = sample.expectedTargets.filter((target) =>
+        returned.some((match) => match.path === target.path && match.name === target.name)).length
+      structuredOk = structuredTargetsHit === structuredTargetsTotal
+    }
     if (structuredOk && sample.category === 'source') structuredOk = structuredResult.value.text === sample.expected.text
-    if (structuredOk && sample.category === 'relation' && sample.relationKind === 'symbol') structuredOk = structuredResult.value.relationships.length === sample.expected.targets.length
+    if (structuredOk && sample.category === 'relation') {
+      // Previously only `relationKind === 'symbol'` was checked, so file
+      // relations (imports/exports/calls) passed on `!isError` alone. Score them
+      // with the same target-token requirement the grep arm receives.
+      const relationships = structuredResult.value.relationships ?? []
+      structuredTargetsTotal = want.length
+      if (sample.relationKind === 'symbol') {
+        // `contains` edges expose only target symbolIds, so the shared token set
+        // is not comparable here; count equality is the strongest check available.
+        structuredTargetsHit = Math.min(relationships.length, want.length)
+        structuredOk = relationships.length === want.length
+      } else {
+        const returnedTokens = relationTargetTokens(relationships)
+        structuredTargetsHit = want.filter((token) => returnedTokens.includes(token)).length
+        structuredOk = want.length === 0 ? relationships.length === 0 : structuredTargetsHit === want.length
+      }
+    }
 
     entry.structured = {
       tool: structuredArgs.name, ok: structuredOk, contentBytes: structuredBytes,
       tokensEst: tokensEst(structuredBytes), ms: structuredMs,
+      precallBytes: structuredPrecallBytes,
+      targetsHit: structuredTargetsHit, targetsTotal: structuredTargetsTotal,
       error: structuredResult.isError ? structuredResult.error.message : null,
     }
 
@@ -445,11 +390,15 @@ try {
   }
 
   report.notes.push(
-    'Both arms ran through the same real ToolRuntime over the same temp corpus copy.',
+    'Both arms ran through the same real ToolRuntime over the same temp corpus copy, on one asserted single-profile DSH host (see evaluationHostGeneration); the copy is byte-verified against the frozen corpus manifest before any probe runs.',
+    'The structured plugin runs with sessionSourceBytes=null, so this single-session sweep cannot let an earlier probe consume a later probe source budget.',
     'grep is line-oriented and reports path+lineNumber+line; it cannot express kind, semantic relation, or an exact byte range, so declaration/source/relation success here is a retrieval-surfacing signal, not a structural-equivalence result.',
     'Declaration grepSortedTop1 sorts matches by (path, lineNumber) and checks the first; raw ripgrep ordering is not a documented contract and was observed to vary between runs (grepTop1 5 or 6 of 8), so grepTop1 is reported for transparency only.',
     'Source-arm baseline cost excludes the mandatory follow-up whole-file read; deferredWholeFileReadBytes records that additional cost.',
-    'Probes were frozen before any run; see probesSha256. Gold was never read to build a probe.',
+    'Both arms are scored against the same per-sample target set (declaration: every expected name at its own path; relation: every expected edge specifier/name/path, with zero-edge requiring an empty result). File relations were previously only checked for `!isError` on the structured arm; that asymmetry is removed.',
+    'Both arms surface target tokens through one shared predicate: identifier-like names must appear on an identifier boundary (so `en` does not score inside `then`, nor `Red` inside `Redux`), while specifiers/paths are matched literally.',
+    'For symbol relations the structured arm pays a symbol-resolution round trip; its latency and model-facing bytes are charged to the structured arm (entry.structured.precallBytes).',
+    'Probes were frozen before any run; see probesSha256 and probeRevision. Gold was never read to build a probe.',
   )
 } catch (error) {
   report.failures.push(`${error?.stack ?? error}`)
@@ -458,7 +407,7 @@ try {
   for (const dir of tempDirs) { try { await rm(dir, { recursive: true, force: true }) } catch {} }
   report.finishedAt = new Date().toISOString()
   report.ok = report.failures.length === 0
-  await mkdir(REPORT_DIR, { recursive: true })
+  await mkdir(dirname(REPORT_PATH), { recursive: true })
   await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`)
 }
 

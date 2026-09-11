@@ -144,10 +144,11 @@ this package's `context_*` tools. Both arms run through one real `ToolRuntime`
 over a temporary corpus copy; only the subprocess seam is shimmed.
 
 The measured bundle is resolved at run time and recorded in the report as
-`grepTool.{entry,version}`. In this workspace it resolves to
-`@deepseek-ai/dsh-tool-fs-search@0.1.3-alpha.2` from the installed DSH profile
-(`../../.dsh/profiles/node_modules/`), not the `0.1.2-rc.1` copy that also
-exists in the root store.
+`grepTool.{entry,version}`. Historical Phase 1 results used the installed DSH
+profile's `@deepseek-ai/dsh-tool-fs-search@0.1.3-alpha.2`; that historical
+number is unchanged. New shared-harness runs consistently source all DSH host
+components from that profile rather than mixing them with package-local 0.1.2
+runtime components.
 
 Probes must be frozen before running. `baseline-grep.patterns.json` was frozen
 at:
@@ -156,24 +157,44 @@ at:
 45d2bd66baaf9a6525089d6fe1905a48c96ed2d743e048f3be937e64f7e75a1f
 ```
 
+That hash is the v1 probe set. Post-review, the file is at `schemaVersion: 2`:
+source probes that name no symbol now use the content-independent anchor `^`
+(v1 used answer-visible keywords such as `string`, the first token of the
+`src-05` gold span), and arm scoring is symmetric target-token coverage
+(`scoring: symmetric-target-coverage-v2`). Both arms now surface target tokens
+through one shared predicate (`harness.mjs` `textSurfacesToken`): identifier-like
+names must fall on an identifier boundary (so `en` cannot score inside `then`,
+nor `Red` inside `Redux`), while punctuation-bearing specifiers/paths are matched
+literally. For symbol relations the structured arm's symbol-resolution round trip
+is charged for both latency and model-facing bytes
+(`entry.structured.precallBytes`). The report records
+`probeSchemaVersion`, `probeRevision`, and `scoring`; v1 and v2 numbers are not
+comparable.
+
 Run:
 
 ```bash
-node eval/m5/grep-baseline.mjs
+node eval/m5/grep-baseline.mjs                     # writes the cached evidence path
+node eval/m5/grep-baseline.mjs --out /tmp/verify.json   # ad-hoc verification only
 ```
 
 The harness writes `node_modules/.cache/m5-eval/reports/baseline-grep.json` with
 `probesSha256` and `goldSha256`, so a changed probe file invalidates the result.
-It never edits the locked corpus or `gold.json`. This pilot is **not** M5
-acceptance evidence and produces no benefit/ROI claim; see
+Use `--out` to keep a throwaway verification run out of the cached report
+directory. It never edits the locked corpus or `gold.json`. This pilot is
+**not** M5 acceptance evidence and produces no benefit/ROI claim; see
 `doc/m5-baseline-grep-pilot.md` for the findings and their limits.
 
 The harness **authors no dependency edge** on the measured tool: it imports the
-real `@deepseek-ai/dsh-tool-fs-search` bundle from the copy already installed in
-this workspace (a transitive dependency of the DSH base profile, normally at
-`../../.dsh/profiles/node_modules/`), so running the baseline does not rewrite
-the shared root `pnpm-lock.yaml`. Set `DSH_FS_SEARCH_ENTRY` to an explicit
-`lib/index.js` to override resolution.
+already-installed profile `@deepseek-ai/dsh-tool-fs-search` bundle, so running
+the baseline does not rewrite the shared root lockfile. Since the host
+unification below, Phase 1 sources its `cordis`/`dsh-session`/`dsh-tools`
+runtime, sandbox and FS/search stack from the same asserted profile graph as
+Phase 2/3 (the shared loader is pinned; `DSH_FS_SEARCH_ENTRY` is no longer
+consulted). Historical `baseline-grep.json` was produced before that change on a
+mixed host, so its numbers are annotated as such in
+`doc/m5-baseline-grep-pilot.md` and require a re-run before being quoted as
+current; `--out` keeps such a re-run out of the cached report directory.
 
 ## Phase 2 agent comparison
 
@@ -192,17 +213,48 @@ calls a tool, and a changed task set invalidates a comparison.
 | `additive` | `default` + `context_*` |
 | `replacement` | `read` + `context_*` (no `grep`/`glob`) |
 
-`lib/harness.mjs` mounts the real product tools from one consistent DSH profile
-install (`.dsh/profiles/node_modules/`) — `dsh-sandbox-local`,
-`dsh-sandbox-policy`, `dsh-fs-sandbox`, `dsh-fs-observation-policy`,
-`dsh-tool-fs` (`read`), `dsh-tool-fs-search` (`grep`/`glob`) — so nothing about
-the compared surfaces is a stand-in.
+`harness.mjs` (used by Phase 2, `semantic-probe.mjs` and
+`audit-tool-surface.mjs`) sources `Context`, `SessionStore`, `ToolRuntime`, LLM
+IDs, storage/domain/workspace, sandbox and FS/search from one DSH profile graph.
+It does not honour `DSH_FS_SEARCH_ENTRY`: the asserted profile entry is pinned.
+The built `context_*` bundle is loaded from its exact bytes through an in-memory
+ESM bridge which remaps its external DSH imports to those same profile module
+entries; no generated bridge is written to disk. Startup requires one DSH
+generation and canonical Cordis/tools/session/LLM peer identities, failing
+before any provider call on a mismatch. Dry-run prints, and a formal report
+stores, every core module's version, canonical entry/package root, source and
+peer identities plus the context bundle hash/remap under `evaluationHost`.
 
 ```bash
 node eval/m5/build-agent-tasks.mjs                      # regenerate (hash must not change)
 node eval/m5/agent-baseline.mjs --dry-run               # no model calls
 node eval/m5/agent-baseline.mjs --repeats 3             # confirmatory run
+node eval/m5/agent-baseline.mjs --repeats 3 --seed fixed # explicit reproducible schedule seed
 ```
+
+A complete three-arm run executes repeat-first rather than arm-first. Across
+repeats, the arm order rotates as `default/additive/replacement`,
+`additive/replacement/default`, then `replacement/default/additive`, repeating
+that Latin-square cycle when more repeats are requested. Within each repeat, a
+frozen-seed deterministic shuffle supplies one task order shared by all arms.
+This counterbalances provider time drift without rebuilding each arm's context
+or warm index. `--arm` and `--task` retain their filtering behavior. The report
+records the seed and every repeat's actual arm/task order under `schedule`;
+`M5_RUN_SEED` is the environment equivalent of `--seed`.
+
+Before any model call, the harness verifies the prepared source tree and every
+per-arm temporary copy against the SHA-256-per-file manifest named by
+`corpus.lock.json`. Structured arms keep one shared index per arm, but are
+configured with `sessionSourceBytes: null`; therefore source reads in an earlier
+question cannot consume a later question's Session budget. The report records
+this evaluation configuration and the verified lock/manifest hashes.
+
+Provider or harness failures are recorded as failed attempts and excluded from
+the completed-run accuracy denominator, as required by the preregistration.
+Every model-call detail records whether tool schemas were actually sent. JSON
+repair turns retain the ordinary schema context with `tool_choice: none`, so
+they cannot launch new retrieval and schema-cost audits need not infer their
+request shape from aggregate `modelCalls`.
 
 The provider is the user's own DeepSeek official endpoint. The key is read from
 `DEEPSEEK_API_KEY` or `.dsh/.credentials.yaml` (`refs.DEEPSEEK_API_KEY`) into
@@ -226,6 +278,15 @@ the syntactic extraction heuristic?** It produces no accuracy number.
   the semantic content an "LSP mode" would hand over — the product ships no
   LSP-backed query path (`src/lsp-adapter.ts` is unreachable from the default
   `apply` and only issues `textDocument/documentSymbol`).
+- compiler options are resolved from the corpus's own
+  `packages/zod/tsconfig.json` via `ts.readConfigFile` + `ts.parseJsonConfigFileContent`
+  and frozen into the report (`compiler.options`, `compiler.tsconfigSha256`); root
+  files stay the frozen corpus `src` set. Earlier reports used a hand-mirrored
+  literal (`strict: false`); a re-run under the corpus options reproduced every
+  headline count, so cite the reports that carry the `compiler` block.
+- the copied corpus is mounted through the shared `mountCorpus` and byte-verified
+  against the frozen manifest before any query runs (same check as Phase 1/2),
+  and the evaluation registry is disposed on exit.
 
 ```bash
 node eval/m5/semantic-probe.mjs                       # writes reports/semantic-probe.json
@@ -246,7 +307,12 @@ evidence rather than a label.
 ```bash
 node eval/m5/audit-tool-surface.mjs          # human-readable
 node eval/m5/audit-tool-surface.mjs --json   # machine-readable
+node eval/m5/audit-tool-surface.mjs --json --out /tmp/tool-surface.json
 ```
+
+It mounts each corpus copy through the shared `mountCorpus` manifest check and
+disposes each arm's registry; `--out` keeps ad-hoc runs out of the cached
+`tool-surface.json`.
 
 It establishes three things: the arms expose exactly `read`/`grep`/`glob` (plus
 `context_*`), the shipped `grep`/`glob` are a packaged **ripgrep 15.0.0** binary

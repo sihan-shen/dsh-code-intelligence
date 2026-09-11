@@ -1,5 +1,10 @@
 # M5 Phase 2 —— 代理对照实验结果（v1：原始措辞）
 
+> **历史结果说明**：本页数字来自 session/corpus/计数审计增强之前的 harness。旧运行跨题复用
+> 一个 Session source budget，未逐臂验证 corpus 副本，也未逐模型调用记录 schema 是否发送；
+> arm/task 顺序还固定不变，使 provider 时间漂移与 arm 混杂。数字保留用于审计，不能视为修复后
+> harness 的正式结果；不得根据代码修复伪造或调整数字。
+>
 > ⚠️ **本文件的准确率结论已被 `doc/m5-phase2b-results.md` 推翻，请勿单独引用。**
 >
 > v1 的 9 个任务使用了被测工具自用的语汇（UTF-16 半开偏移、`paddingLines`/夹取、`` `calls` relation ``），

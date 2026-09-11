@@ -30,21 +30,32 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   COMMIT,
+  CORPUS_ROOT,
+  DEFAULT_AGENT_RUN_SEED,
+  EVALUATION_CODE_INTELLIGENCE_CONFIG,
   GOLD_PATH,
   REPORT_DIR,
-  SessionId,
   contentBytes,
   contentText,
+  createAgentRunSchedule,
+  jsonRepairRequest,
+  loadCodeIntelligence,
+  loadCorpusManifest,
   loadFsSearch,
   makeCaller,
   makeRegistry,
   mountCorpus,
   mountRetrievalTools,
+  requestCarriesToolSchemas,
   resolveApiKey,
+  resolveEvaluationHost,
   sha256,
+  summarizeCompletedRuns,
+  summarizeTaskMajority,
+  verifyCorpusTree,
   forwardedPromptSections,
   systemPromptForTools,
-} from './lib/harness.mjs'
+} from './harness.mjs'
 
 const TASKS_PATH = fileURLToPath(new URL('./agent-tasks.json', import.meta.url))
 const REPORT_PATH = join(REPORT_DIR, 'agent-comparison.json')
@@ -61,6 +72,7 @@ const DRY_RUN = hasFlag('dry-run')
 const REQUESTED_ARM = argValue('arm', null)
 const REQUESTED_TASK = argValue('task', null)
 const REPEATS = Number(argValue('repeats', process.env.M5_REPEATS ?? '1'))
+const RUN_SEED = argValue('seed', process.env.M5_RUN_SEED ?? DEFAULT_AGENT_RUN_SEED)
 const OUT_PATH = argValue('out', null) ?? REPORT_PATH
 
 const MODEL = process.env.M5_AGENT_MODEL ?? 'deepseek-chat'
@@ -190,6 +202,7 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
   let toolResultBytes = 0
   let finalText = ''
   let stopReason = 'unknown'
+  const modelCallDetails = []
 
   while (modelCalls < maxModelCalls) {
     modelCalls += 1
@@ -203,6 +216,15 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
       stream: false,
     }
     const response = await chatCompletion(body)
+    modelCallDetails.push({
+      ordinal: modelCalls,
+      kind: 'agent',
+      carriesToolSchemas: requestCarriesToolSchemas(body),
+      toolSchemaCount: body.tools?.length ?? 0,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+    })
     for (const key of Object.keys(usage)) usage[key] += response.usage?.[key] ?? 0
     const message = response.choices?.[0]?.message ?? {}
     const toolCalls = message.tool_calls ?? []
@@ -254,7 +276,19 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
     })
     modelCalls += 1
     repairTurns += 1
-    const response = await chatCompletion({ model: MODEL, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false })
+    // Preserve the ordinary tool/schema context while preventing a format-only
+    // repair from starting new retrieval after grading has begun.
+    const repairBody = jsonRepairRequest({ model: MODEL, messages, wireTools, maxOutputTokens })
+    const response = await chatCompletion(repairBody)
+    modelCallDetails.push({
+      ordinal: modelCalls,
+      kind: 'json-repair',
+      carriesToolSchemas: requestCarriesToolSchemas(repairBody),
+      toolSchemaCount: repairBody.tools?.length ?? 0,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+    })
     for (const key of Object.keys(usage)) usage[key] += response.usage?.[key] ?? 0
     finalText = response.choices?.[0]?.message?.content ?? ''
     graded = grade(task.answerSpec, finalText)
@@ -275,6 +309,9 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
     toolResultBytes,
     ms: Math.round(performance.now() - started),
     repairTurns,
+    modelCallsWithToolSchemas: modelCallDetails.filter(call => call.carriesToolSchemas).length,
+    modelCallsWithoutToolSchemas: modelCallDetails.filter(call => !call.carriesToolSchemas).length,
+    modelCallDetails,
     // Full raw answer retained so a judge can re-grade without re-running the
     // model (the preview alone is not enough to audit a near miss).
     finalText,
@@ -287,7 +324,12 @@ async function runTask({ call, wireTools, allowed, task, systemPrompt, maxModelC
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Resolve the entire host graph first: a mixed Cordis/ToolRuntime identity is
+  // an invalid experiment and must fail before corpus or provider activity.
+  const evaluationHost = await resolveEvaluationHost()
   const tasksDoc = JSON.parse(await readFile(TASKS_PATH, 'utf8'))
+  const corpusIdentity = await loadCorpusManifest()
+  const preparedCorpus = await verifyCorpusTree(CORPUS_ROOT, corpusIdentity.manifest)
   const goldBytes = await readFile(GOLD_PATH)
   const goldSha256 = sha256(goldBytes)
   if (tasksDoc.sources.goldSha256 !== goldSha256) {
@@ -300,25 +342,39 @@ async function main() {
   // tool-shaped remainder is reported beside it, never mixed in.
   const NEUTRAL_IDS = new Set(tasks.filter((t) => t.vocabulary !== 'tool-shaped').map((t) => t.id))
   const TOOL_SHAPED_IDS = new Set(tasks.filter((t) => t.vocabulary === 'tool-shaped').map((t) => t.id))
-  const subset = (runs, ids) => {
-    const sel = runs.filter((r) => ids.has(r.taskId))
-    const ok = sel.filter((r) => r.ok).length
-    return { tasks: ids.size, runs: sel.length, correct: ok, correctRate: sel.length ? Number((ok / sel.length).toFixed(4)) : null }
-  }
+  const subset = (runs, ids) => ({ tasks: ids.size, ...summarizeCompletedRuns(runs, ids) })
+  // Preregistered primary endpoint (doc/m5-phase2b-preregistration.md §5):
+  // per-task majority vote across repeats, averaged over tasks.
+  const majoritySubset = (runs, ids) => ({ tasks: ids.size, ...summarizeTaskMajority(runs, ids) })
 
   const armNames = REQUESTED_ARM ? [REQUESTED_ARM] : Object.keys(ARMS)
   for (const name of armNames) if (!ARMS[name]) throw new Error(`unknown arm ${name}`)
+  const taskById = new Map(tasks.map(task => [task.id, task]))
+  const schedule = createAgentRunSchedule({ armNames, taskIds: tasks.map(task => task.id), repeats: REPEATS, seed: RUN_SEED })
 
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'm5-phase2-agent-comparison',
     startedAt: new Date().toISOString(),
     node: process.version,
+    evaluationHost: evaluationHost.provenance,
     corpusCommit: COMMIT,
+    corpusVerification: {
+      lockSha256: corpusIdentity.lockSha256,
+      manifestSha256: corpusIdentity.manifestSha256,
+      preparedRootVerification: preparedCorpus,
+      copiesVerifiedAgainstManifest: true,
+    },
+    evaluationCodeIntelligenceConfig: EVALUATION_CODE_INTELLIGENCE_CONFIG,
     goldSha256,
     tasksSha256: sha256(await readFile(TASKS_PATH)),
     tasksSchemaVersion: tasksDoc.schemaVersion,
     repeats: REPEATS,
+    schedule: {
+      seed: RUN_SEED,
+      strategy: 'cyclic-latin-square-arms-and-seeded-fisher-yates-tasks-v1',
+      repeats: schedule.map(item => ({ repeat: item.repeat, armOrder: [...item.armOrder], taskOrder: [...item.taskOrder] })),
+    },
     provider: { baseUrl: BASE_URL, model: MODEL, temperature: 0, apiKeySource: API_KEY_SOURCE },
     vocabulary: { neutral: [...NEUTRAL_IDS], toolShaped: [...TOOL_SHAPED_IDS] },
     arms: {},
@@ -327,22 +383,24 @@ async function main() {
   }
 
   if (DRY_RUN) {
+    console.log(`evaluationHost=${JSON.stringify(evaluationHost.provenance)}`)
     for (const name of armNames) {
       const spec = ARMS[name]
       const ctx = await makeRegistry()
       const parent = await mkdtemp(join(tmpdir(), `m5-agent-dry-${name}-`))
-      const root = await mountCorpus(ctx, join(parent, 'src'))
+      const root = await mountCorpus(ctx, join(parent, 'src'), corpusIdentity.manifest)
       const { module: fsSearch } = await loadFsSearch()
       const { provenance, promptSections } = await mountRetrievalTools(ctx, root, { includeSearch: spec.search, fsSearch })
       if (spec.structured) {
-        const codeIntel = await import('../../lib/index.js')
-        await ctx.plugin(codeIntel.apply, { deploymentRoot: '.', revision: COMMIT })
+        const codeIntel = await loadCodeIntelligence()
+        await ctx.plugin(codeIntel.apply, EVALUATION_CODE_INTELLIGENCE_CONFIG)
       }
       const names = ctx.tools.schemas().map((s) => s.name)
       const allowed = names.filter((n) => n !== 'write' && n !== 'edit' && (!n.startsWith(STRUCTURED_PREFIX) || spec.structured))
       const systemPrompt = systemPromptForTools(SYSTEM_PREAMBLE, promptSections, allowed)
       console.log(`${name.padEnd(12)} tools=[${allowed.join(', ')}]  provenance=${JSON.stringify(provenance)}`)
       console.log(`${''.padEnd(12)} promptSections=${JSON.stringify((promptSections ?? []).map((s) => `${s.name}@${s.order}`))}  systemPromptChars=${systemPrompt.length}`)
+      await ctx.fiber.dispose()
       await rm(parent, { recursive: true, force: true })
     }
     console.log(`dry run ok: ${tasks.length} task(s), ${armNames.length} arm(s)`)
@@ -351,131 +409,175 @@ async function main() {
 
   if (!API_KEY) throw new Error('no DeepSeek API key: set DEEPSEEK_API_KEY, or provide .dsh/.credentials.yaml with refs.DEEPSEEK_API_KEY (the key is never written to artifacts)')
 
-  for (const name of armNames) {
-    const spec = ARMS[name]
-    const ctx = await makeRegistry()
-    const parent = await mkdtemp(join(tmpdir(), `m5-agent-${name}-`))
-    const root = await mountCorpus(ctx, join(parent, 'src'))
-    const { module: fsSearch } = await loadFsSearch()
-    const { provenance, promptSections } = await mountRetrievalTools(ctx, root, { includeSearch: spec.search, fsSearch })
-    if (spec.structured) {
-      const codeIntel = await import('../../lib/index.js')
-      await ctx.plugin(codeIntel.apply, { deploymentRoot: '.', revision: COMMIT })
+  const armRuntimes = new Map()
+  try {
+    // Initialize each arm once. The repeat-first execution schedule below
+    // counterbalances provider time while preserving each arm's warm index.
+    for (const name of armNames) {
+      const spec = ARMS[name]
+      const ctx = await makeRegistry()
+      const parent = await mkdtemp(join(tmpdir(), `m5-agent-${name}-`))
+      try {
+        const root = await mountCorpus(ctx, join(parent, 'src'), corpusIdentity.manifest)
+        const { module: fsSearch } = await loadFsSearch()
+        const { provenance, promptSections } = await mountRetrievalTools(ctx, root, { includeSearch: spec.search, fsSearch })
+        if (spec.structured) {
+          const codeIntel = await loadCodeIntelligence()
+          await ctx.plugin(codeIntel.apply, EVALUATION_CODE_INTELLIGENCE_CONFIG)
+        }
+        const schemas = ctx.tools.schemas()
+        const allowed = new Set(
+          schemas
+            .map((schema) => schema.name)
+            .filter((toolName) => toolName !== 'write' && toolName !== 'edit')
+            .filter((toolName) => !toolName.startsWith(STRUCTURED_PREFIX) || spec.structured),
+        )
+        const wireTools = toWireTools(schemas.filter((schema) => allowed.has(schema.name)))
+        const systemPrompt = systemPromptForTools(SYSTEM_PREAMBLE, promptSections, [...allowed])
+        const session = ctx.sessions.prepare(ctx.evaluationHostApis.SessionId(`m5-agent-${name}`), { meta: { cwd: root } })
+        const detach = ctx.sessions.enter(session)
+        ctx.sessions.announce(session)
+        const call = makeCaller(ctx, session)
+        const coldStart = performance.now()
+        if (spec.structured) await call('context_repo_map', {}, `warm-${name}`)
+        armRuntimes.set(name, {
+          spec, ctx, parent, detach, provenance, promptSections, allowed, wireTools, systemPrompt, call,
+          coldMs: Math.round(performance.now() - coldStart), runs: [],
+        })
+      } catch (error) {
+        await ctx.fiber.dispose().catch(() => undefined)
+        await rm(parent, { recursive: true, force: true })
+        throw error
+      }
     }
-    const schemas = ctx.tools.schemas()
-    const allowed = new Set(
-      schemas
-        .map((s) => s.name)
-        .filter((n) => n !== 'write' && n !== 'edit')
-        .filter((n) => !n.startsWith(STRUCTURED_PREFIX) || spec.structured),
-    )
-    const wireTools = toWireTools(schemas.filter((s) => allowed.has(s.name)))
-    // Forward the product's own prompt sections for the exposed tools, exactly
-    // as the shipped harness would; a tool that was filtered out contributes
-    // neither a tool schema nor a prompt section.
-    const systemPrompt = systemPromptForTools(SYSTEM_PREAMBLE, promptSections, [...allowed])
-    const session = ctx.sessions.prepare(SessionId(`m5-agent-${name}`), { meta: { cwd: root } })
-    ctx.sessions.enter(session)
-    ctx.sessions.announce(session)
-    const call = makeCaller(ctx, session)
 
-    const runs = []
-    const coldStart = performance.now()
-    if (spec.structured) {
-      // Warm the structured index once per arm so cold-start is reported apart from per-task cost.
-      await call('context_repo_map', {}, `warm-${name}`)
-    }
-    const coldMs = Math.round(performance.now() - coldStart)
-
-    for (let repeat = 1; repeat <= REPEATS; repeat += 1) {
-      for (const task of tasks) {
-        process.stdout.write(`[${name}] r${repeat} ${task.id} ... `)
-        try {
-          const run = await runTask({
-            call,
-            wireTools,
-            allowed,
-            task,
-            systemPrompt,
-            maxModelCalls: tasksDoc.budget.maxModelCalls,
-            maxToolCalls: tasksDoc.budget.maxToolCalls,
-            maxOutputTokens: tasksDoc.budget.maxOutputTokens,
-          })
-          run.repeat = repeat
-          runs.push(run)
-          console.log(run.ok ? `ok (${run.modelCalls}m/${run.toolCalls}t ${run.totalTokens}tok)` : `FAIL ${run.gradeReason}`)
-        } catch (error) {
-          console.log(`ERROR ${error?.message ?? error}`)
-          report.failures.push(`${name}/${task.id}/r${repeat}: ${error?.message ?? error}`)
-          runs.push({ taskId: task.id, category: task.category, repeat, ok: false, stopReason: 'harness-error', gradeReason: String(error?.message ?? error) })
+    for (const scheduledRepeat of schedule) {
+      for (const name of scheduledRepeat.armOrder) {
+        const runtime = armRuntimes.get(name)
+        for (const taskId of scheduledRepeat.taskOrder) {
+          const task = taskById.get(taskId)
+          if (task === undefined) throw new Error(`scheduled unknown task ${taskId}`)
+          process.stdout.write(`[${name}] r${scheduledRepeat.repeat} ${task.id} ... `)
+          try {
+            const run = await runTask({
+              call: runtime.call,
+              wireTools: runtime.wireTools,
+              allowed: runtime.allowed,
+              task,
+              systemPrompt: runtime.systemPrompt,
+              maxModelCalls: tasksDoc.budget.maxModelCalls,
+              maxToolCalls: tasksDoc.budget.maxToolCalls,
+              maxOutputTokens: tasksDoc.budget.maxOutputTokens,
+            })
+            run.repeat = scheduledRepeat.repeat
+            runtime.runs.push(run)
+            console.log(run.ok ? `ok (${run.modelCalls}m/${run.toolCalls}t ${run.totalTokens}tok)` : `FAIL ${run.gradeReason}`)
+          } catch (error) {
+            console.log(`ERROR ${error?.message ?? error}`)
+            report.failures.push(`${name}/${task.id}/r${scheduledRepeat.repeat}: ${error?.message ?? error}`)
+            runtime.runs.push({ taskId: task.id, category: task.category, repeat: scheduledRepeat.repeat, ok: false, stopReason: 'harness-error', gradeReason: String(error?.message ?? error), modelCallDetails: [] })
+          }
         }
       }
     }
 
-    const sum = (key) => runs.reduce((n, r) => n + (r[key] ?? 0), 0)
-    const byCategory = {}
-    for (const run of runs) {
-      const bucket = (byCategory[run.category] ??= { runs: 0, ok: 0, tokens: 0, toolCalls: 0, modelCalls: 0 })
-      bucket.runs += 1
-      if (run.ok) bucket.ok += 1
-      bucket.tokens += run.totalTokens ?? 0
-      bucket.toolCalls += run.toolCalls ?? 0
-      bucket.modelCalls += run.modelCalls ?? 0
-    }
-    const toolCounts = {}
-    for (const run of runs) for (const [tool, n] of Object.entries(run.toolCounts ?? {})) toolCounts[tool] = (toolCounts[tool] ?? 0) + n
+    for (const name of armNames) {
+      const runtime = armRuntimes.get(name)
+      const { spec, provenance, promptSections, allowed, systemPrompt, coldMs, runs } = runtime
+      const sum = (key) => runs.reduce((total, run) => total + (run[key] ?? 0), 0)
+      const byCategory = {}
+      for (const run of runs) {
+        const bucket = (byCategory[run.category] ??= { attempts: 0, completed: 0, failed: 0, correct: 0, tokens: 0, toolCalls: 0, modelCalls: 0 })
+        bucket.attempts += 1
+        if (run.stopReason === 'harness-error') bucket.failed += 1
+        else {
+          bucket.completed += 1
+          if (run.ok) bucket.correct += 1
+        }
+        bucket.tokens += run.totalTokens ?? 0
+        bucket.toolCalls += run.toolCalls ?? 0
+        bucket.modelCalls += run.modelCalls ?? 0
+      }
+      for (const bucket of Object.values(byCategory)) {
+        bucket.correctRate = bucket.completed ? Number((bucket.correct / bucket.completed).toFixed(4)) : null
+      }
+      const toolCounts = {}
+      for (const run of runs) for (const [tool, count] of Object.entries(run.toolCounts ?? {})) toolCounts[tool] = (toolCounts[tool] ?? 0) + count
 
-    report.arms[name] = {
-      label: spec.label,
-      search: spec.search,
-      structured: spec.structured,
-      provenance,
-      exposedTools: [...allowed].sort(),
-      coldStartMs: coldMs,
-      runs: runs.length,
-      correct: runs.filter((r) => r.ok).length,
-      correctRate: runs.length ? Number((runs.filter((r) => r.ok).length / runs.length).toFixed(4)) : null,
-      totalTokens: sum('totalTokens'),
-      promptTokens: sum('promptTokens'),
-      completionTokens: sum('completionTokens'),
-      toolResultBytes: sum('toolResultBytes'),
-      toolCalls: sum('toolCalls'),
-      modelCalls: sum('modelCalls'),
-      toolCounts,
-      byCategory,
-      byVocabulary: {
-        neutral: subset(runs, NEUTRAL_IDS),
-        toolShaped: subset(runs, TOOL_SHAPED_IDS),
-      },
-      systemPromptChars: systemPrompt.length,
-      promptSectionsRegistered: (promptSections ?? []).map((s) => ({ name: s.name, order: s.order })),
-      promptSectionsForwarded: forwardedPromptSections(promptSections, [...allowed]).map((s) => ({ name: s.name, order: s.order })),
-      detail: runs,
+      const accuracy = summarizeCompletedRuns(runs)
+      report.arms[name] = {
+        label: spec.label,
+        search: spec.search,
+        structured: spec.structured,
+        provenance,
+        exposedTools: [...allowed].sort(),
+        coldStartMs: coldMs,
+        runs: runs.length,
+        attempts: accuracy.attempts,
+        completed: accuracy.completed,
+        failed: accuracy.failed,
+        correct: accuracy.correct,
+        correctRate: accuracy.correctRate,
+        totalTokens: sum('totalTokens'),
+        promptTokens: sum('promptTokens'),
+        completionTokens: sum('completionTokens'),
+        toolResultBytes: sum('toolResultBytes'),
+        toolCalls: sum('toolCalls'),
+        modelCalls: sum('modelCalls'),
+        modelCallsWithToolSchemas: sum('modelCallsWithToolSchemas'),
+        modelCallsWithoutToolSchemas: sum('modelCallsWithoutToolSchemas'),
+        toolCounts,
+        byCategory,
+        byVocabulary: {
+          neutral: subset(runs, NEUTRAL_IDS),
+          neutralMajority: majoritySubset(runs, NEUTRAL_IDS),
+          toolShaped: subset(runs, TOOL_SHAPED_IDS),
+          toolShapedMajority: majoritySubset(runs, TOOL_SHAPED_IDS),
+        },
+        systemPromptChars: systemPrompt.length,
+        promptSectionsRegistered: (promptSections ?? []).map((section) => ({ name: section.name, order: section.order })),
+        promptSectionsForwarded: forwardedPromptSections(promptSections, [...allowed]).map((section) => ({ name: section.name, order: section.order })),
+        detail: runs,
+      }
     }
-    await rm(parent, { recursive: true, force: true })
+  } finally {
+    for (const runtime of armRuntimes.values()) {
+      runtime.detach?.()
+      await runtime.ctx.fiber.dispose().catch(() => undefined)
+      await rm(runtime.parent, { recursive: true, force: true })
+    }
   }
 
   report.notes.push(
     'All arms share one frozen task set, one corpus copy per arm, one model, temperature 0, and identical token/tool caps.',
+    'The report records the complete asserted evaluation-host module graph; startup fails before provider calls if DSH versions or Cordis/tool peer identities differ.',
     '`default` is the shipped DSH read-only retrieval surface (`read`+`grep`+`glob`); `additive` adds the structured tools; `replacement` removes `grep`/`glob` and keeps only `read` plus the structured tools.',
     'Excluded from every arm: write/edit and the rest of the dsh-base surface (bash, subagent, web, workflow, todo, skill) because they are outside retrieval.',
     'Grading is programmatic against the frozen answerSpec; order-independent set comparison for path/name/target sets, exact equality for text and lines.',
     'A single repeat cannot detect small accuracy differences; token/tool-call differences are the more sensitive signal at low N.',
+    'Provider/harness errors are reported as failed attempts and excluded from completed-run accuracy denominators.',
+    'Structured arms share one index per arm, while sessionSourceBytes=null prevents source reads in earlier tasks from consuming a later task\'s evaluation capacity.',
+    'Every copied corpus tree is verified against the locked per-file manifest before its arm is mounted.',
+    'Full comparisons use a cyclic Latin-square arm order across repeats; each repeat applies one frozen-seed deterministic task permutation shared by all arms.',
+    'Each model call records whether tool schemas were sent; JSON repair preserves the same schemas with tool_choice=none.',
     'The system prompt is the arm-neutral preamble plus the product\'s own registered sections for exactly the tools that arm exposes, so no arm is told about a tool it cannot call.',
     'The primary accuracy figure is `byVocabulary.neutral`; `byVocabulary.toolShaped` covers tasks whose wording still depends on the tested tool\'s request model and is reported as a diagnostic only.',
+    'The preregistered primary endpoint is `byVocabulary.neutralMajority` / `toolShapedMajority`: per-task majority vote across repeats, then averaged over tasks (doc/m5-phase2b-preregistration.md §5). `byVocabulary.neutral` is the older run-pooled figure and is kept only for continuity with already-published reports.',
   )
 
   report.finishedAt = new Date().toISOString()
   report.ok = report.failures.length === 0
+  report.primaryEndpoint = 'byVocabulary.neutralMajority (per-task majority across repeats, averaged over tasks)'
   await mkdir(REPORT_DIR, { recursive: true })
   await mkdir(dirname(OUT_PATH), { recursive: true })
   await writeFile(OUT_PATH, `${JSON.stringify(report, null, 2)}\n`)
 
   for (const [name, arm] of Object.entries(report.arms)) {
     console.log(
-      `${name.padEnd(12)} ${arm.correct}/${arm.runs} all  ` +
-        `neutral ${arm.byVocabulary.neutral.correct}/${arm.byVocabulary.neutral.runs}  ` +
-        `${arm.byVocabulary.toolShaped.runs ? `tool-shaped ${arm.byVocabulary.toolShaped.correct}/${arm.byVocabulary.toolShaped.runs}  ` : ''}` +
+      `${name.padEnd(12)} ${arm.correct}/${arm.completed} completed (${arm.failed} failed)  ` +
+        `neutral ${arm.byVocabulary.neutral.correct}/${arm.byVocabulary.neutral.completed} pooled | ` +
+        `neutral-majority ${arm.byVocabulary.neutralMajority.correct}/${arm.byVocabulary.neutralMajority.evaluated} PRIMARY  ` +
+        `${arm.byVocabulary.toolShaped.attempts ? `tool-shaped ${arm.byVocabulary.toolShaped.correct}/${arm.byVocabulary.toolShaped.completed} completed  ` : ''}` +
         `tokens=${arm.totalTokens}  toolCalls=${arm.toolCalls}  modelCalls=${arm.modelCalls}`,
     )
   }

@@ -1,7 +1,19 @@
 # M5 Phase 2b 结果（公平性修复后的重跑）
 
+> **历史结果说明**：以下数字来自 session/corpus/计数审计增强之前的运行，未因后续 harness
+> 修复而重算。旧运行跨题复用了一个 Session source budget、未逐臂验证 corpus 副本，且固定按
+> `default → additive → replacement` 和固定 task 顺序整臂运行，provider 时间漂移与 arm 完全混杂；
+> 因此这些数字只能作为历史观察，不是修复后 harness 的正式结果。必须另行预注册并重跑，不能用
+> 代码修复推算或改写本页数字。
+>
 > 预注册：`doc/m5-phase2b-preregistration.md`（运行前冻结）。
 > 本轮**推翻**了 Phase 2（v1）关于准确率的核心结论。v1 报告保留不覆盖：`agent-comparison.json`。
+>
+> **宿主一致性补充（不改历史数字）**：事后审计发现该历史运行把本包的
+> `dsh-tools`/`dsh-session@0.1.2-rc.1` 与 profile FS `0.1.3-alpha.2` 混装。新 harness
+> 已改为让整个宿主使用单一 profile 0.1.3 graph，并将 context bundle 的 DSH externals
+> 以内存 ESM bridge 映射到同一 canonical peer identity；启动时不一致即 fail closed。
+> 因此本页结果属于旧宿主，不能冒充修复后的复现实验。
 
 | 项 | 值 |
 |---|---|
@@ -15,6 +27,19 @@
 ## 1. 头条结论
 
 **v1 观察到的"结构化工具准确率更高"完全是指令措辞造成的假象。**
+
+> **审阅修正（不改上表数字）**："完全是指令措辞"的归因过强。本轮同时启用了三项提示构念修复——
+> F1 中性前言、F2 转发产品真实 `systemPrompt` 段、F4 提问措辞去工具化（见
+> `doc/m5-phase2b-preregistration.md` §2）——它们都改变模型看到的提示，本轮设计无法拆分各自
+> 贡献。准确说法是："v1 的准确率优势主要是**提示构念修复合集**的产物，而非稳定的结构化工具能力
+> 优势"。
+>
+> **主终点口径**：下表 "v2 准确率（360 次运行）" 列是**运行级池化**，而且把两轮复制合并计数；
+> 预注册 §5 的主终点是**单轮 N=3 内按任务多数票**，§7 又规定两轮复制不得合并。按冻结的单轮
+> 口径分别重算，`agent-comparison-v2.json` 与首轮 `agent-comparison-v2-run1.json` 各自 neutral
+> 子集（19 题）三臂均为 **19/19 = 100.0%**；round-2 `default` 的池化 56/57 只来自 `decl-01`
+> 在 3 次中失败 1 次（2/3，其任务多数票仍正确，与上表 "任务多数票 20/20" 一致）。修复后的
+> `agent-baseline.mjs` 输出 `byVocabulary.neutralMajority` 作为主终点。
 
 把 9 个使用被测工具自用语汇的提问改成普通话术后：
 
@@ -53,7 +78,9 @@ v1 的四个"判别性任务"在两轮 v2 中的逐格变化：
 
 ### 2.1 成本分解：`additive` 的劣势几乎全是工具描述体量
 
-工具 schema 每次请求都重发（见 `doc/m5-tool-surface-audit.md`）：
+当次请求携带工具定义时，工具 schema 会重发（见 `doc/m5-tool-surface-audit.md`）。旧报告没有
+逐调用保存该标志，且旧 JSON repair 请求不带 schema，因此下表按全部 `modelCalls` 推算的 schema
+合计会高估 repair turn 的 schema 开销；保留原数字仅供历史复核，不应作为精确校正值：
 
 | 臂 | schema token/请求 | schema 合计 | 占总 token | 扣除 schema 后的 token | **R_adj** |
 |---|---|---|---|---|---|

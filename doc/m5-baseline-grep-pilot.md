@@ -5,6 +5,16 @@
 本包的 `context_*` 结构化工具，在**同一探针、同一语料、同一 ToolRuntime** 下各自
 能定位到什么、代价是多少。
 
+> **宿主一致性说明（不改本文数字）**：本页数字由 Phase 1 早前版本的 `grep-baseline.mjs`
+> 产出。当时该脚本把 `cordis`/`dsh-session`/`dsh-tools`/`dsh-storage*`/`dsh-workspace`
+> 取自包内 `0.1.2-rc.1`，而把 `dsh-tool-fs-search` 取自 profile `0.1.3-alpha.2`（混用
+> 宿主），并且在一个 Session 内跨探针累计 `context_expand_source` 的 source 预算。
+> **现已修复**：`grep-baseline.mjs` 已改用与 Phase 2 相同的共享加载器，从单一 profile
+> graph 断言并解析同一代次（当前 `0.1.3-alpha.2`）的全部宿主组件，语料拷贝在跑探针前
+> 逐字节对照冻结 manifest 校验，结构化插件以 `sessionSourceBytes=null` 运行。因此本页
+> 数字仍属于旧宿主，只能作为历史工程观察，不能冒充统一宿主后的正式结果；当前宿主下用
+> `node eval/m5/grep-baseline.mjs --out <path>` 重跑可得到判分一致的报告（不写缓存）。
+
 ## 1. 为什么这样做
 
 M5 的 20 条冻结 gold 只证明「结构化抽取结果正确」，不证明「比默认检索更好」。
@@ -28,8 +38,31 @@ M5 的 20 条冻结 gold 只证明「结构化抽取结果正确」，不证明�
 
 ```
 probes  sha256:45d2bd66baaf9a6525089d6fe1905a48c96ed2d743e048f3be937e64f7e75a1f
+        (v1；下文 v2 修订后另记，历史报告仍对应 v1)
 gold    sha256:cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237
 ```
+
+> **事后审阅修订（v2，不改本页历史数字）**：审阅发现两处偏差，已在代码/探针中修复：
+> 1. **探针偷看答案**：v1 的 source 类探针用了 `string`（恰好是 `src-05` gold span 的首个
+>    token）、`export`、`type` 等“目标行上可见”的关键词，违反本文件自定的"不得取自 gold"
+>    规则。v2 把未在任务中命名符号的 source 探针改为与内容无关的行首锚点 `^`；仅
+>    `src-02` 保留 `version`，因为其任务明确点名该常量。探针 `schemaVersion` 升为 2，
+>    并记录 `revision` 原因；确切 sha256 见修复后报告的 `probesSha256`。
+> 2. **两臂评分不对称**：grep 的 relation 臂原本“文件里任意命中”即算 located，而结构化臂对
+>    文件型关系（imports/exports/calls）**根本没有正确性检查**（只要不报错就 ok）。v2 让两臂
+>    用同一套目标 token 覆盖判据：声明按“每个期望名字在各自路径上被返回”，关系按“每条期望
+>    边的 specifier/name/path 全部覆盖，零边要求空结果”。因此 `rel-03`（enum 成员）现在正确
+>    判 grep 失败（0/3）而结构化通过（3/3）。`scoring` 记为 `symmetric-target-coverage-v2`。
+> 3. **第二轮审阅补修**：grep 臂的目标 token 命中原来用 `String.includes`（子串），而结构化臂
+>    用精确集合相等，于是 `en` 会因 `then`/路径段而误命中、`Red` 会因 `Redux` 而误命中——这个
+>    不对称**偏向 grep**。现在两臂共用同一个 token 判据：标识符类 token 必须落在标识符边界上，
+>    specifier/path 类含标点则按字面匹配。另外，symbol 型关系里结构化臂必须先做一次
+>    `context_symbol_query` 解析，原先只计其延时、不计其模型可见字节；现在该前置轮的字节与
+>    延时都计入结构化臂（`entry.structured.precallBytes`）。
+>
+> 本页表格中的 `20/20` 与 `located` 定义属于 **v1 口径**，不是修复后结果；修复后的 Phase 1
+> 必须重新运行并在新报告中引用。可通过 `node eval/m5/grep-baseline.mjs --out <path>` 把验证
+> 运行写到缓存报告目录之外。
 
 被测 bundle 版本由运行时实测记录在报告 `grepTool.version`：本工作区解析到的是 DSH profile 中的
 `@deepseek-ai/dsh-tool-fs-search@0.1.3-alpha.2`（`.dsh/profiles/node_modules/...` →
@@ -40,6 +73,7 @@ gold    sha256:cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237
 - `located`（检索面）：grep 臂 = 有返回行与 gold 目标 span/文件/端点**行级重叠**；
   结构化臂 = `context_*` 返回的非错误结果与 gold 期望**结构相等**（声明数、source 文本、
   关系条数）。两者的严格程度不同，这一点本身就是结论的一部分，不能把 `20/20` 当成等价。
+  （v1 口径；v2 已改为两臂统一的目标 token 覆盖判据，见上文修订说明。）
 - `cost`：模型可见的 `ContentBlock` 文本 UTF-8 字节数。
 - `tokensEst`：`ceil(bytes / 4)`，不是 provider 分词器。
 - 声明臂额外记 `matches` 与 `sortedFirstIsTarget`（按 `(path, lineNumber)` 排序后首条是否命中）。
@@ -108,12 +142,14 @@ node scripts/prepare-m5-env.mjs --verify-only
 node eval/m5/grep-baseline.mjs
 ```
 
-`grep` 臂需要真实产品包已在本工作区安装；harness 会依次尝试包内
-`node_modules`、monorepo `.dsh/profiles/node_modules/`、root `.pnpm` store，
-可用 `DSH_FS_SEARCH_ENTRY=<abs path to lib/index.js>` 显式指定。找不到时会以
-明确错误退出。报告里的 `grepTool.entry` 记录了实际使用的 bundle 路径。
+`grep` 臂需要真实产品包已在本工作区安装；自主机统一（见 `eval/m5/README.md`）
+后，Phase 1 与 Phase 2/3 一样从同一份已断言的 profile 依赖图里解析 bundle，
+`DSH_FS_SEARCH_ENTRY` 不再被读取，报告里的 `grepTool.entry` / `grepTool.version`
+记录了实际使用的 bundle 与代次（`evaluationHostGeneration`）。
 
-harness 会在临时目录拷贝语料，跑完删除；锁定语料与 `gold.json` 均不被修改。
+harness 会在临时目录拷贝语料，**逐字节对照冻结 manifest 校验后**才跑探针，跑完删除；
+锁定语料与 `gold.json` 均不被修改。结构化插件以 `sessionSourceBytes=null` 运行，
+因此单会话扫过全部探针时，靠前的探针不会吃掉靠后探针的源码预算。
 探针文件被改动时，报告里的 `probesSha256` 会与之不一致，结果即失效。
 
 ## 8. 产物

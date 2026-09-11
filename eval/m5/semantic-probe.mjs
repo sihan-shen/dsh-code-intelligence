@@ -16,21 +16,19 @@
  * Then it diffs B against the frozen gold / the heuristic edges.
  *
  * Constraints honoured: no new dependency (bundled `typescript@5.9.3`), no network,
- * no external process, corpus and gold.json are never written.
+ * no external process, corpus and gold.json are never written. Compiler options are
+ * resolved from the corpus package's own `tsconfig.json` (not a hand-mirrored
+ * literal) and frozen into the report with its sha256.
  *
  * Usage: node eval/m5/semantic-probe.mjs [--out <path>]
  */
-import { readFile, writeFile, readdir, mkdtemp, cp, rm } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
+import { readFile, writeFile, readdir, mkdtemp, rm } from 'node:fs/promises'
+import { join, relative, sep, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { performance } from 'node:perf_hooks'
 
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
-
-import { apply as codeIntelligenceApply } from '../../lib/index.js'
-import { COMMIT, CORPUS_ROOT, REPORT_DIR, GOLD_PATH, sha256, makeRegistry, mountRetrievalTools } from './lib/harness.mjs'
+import { COMMIT, CORPUS_ROOT, EVALUATION_CODE_INTELLIGENCE_CONFIG, REPORT_DIR, GOLD_PATH, sha256, loadCodeIntelligence, loadCorpusManifest, makeRegistry, mountCorpus, mountRetrievalTools } from './harness.mjs'
 
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
@@ -61,24 +59,30 @@ const isTestPath = (p) => /(^|\/)tests?\//.test(p) || /\.test\.tsx?$/.test(p)
 // ---------------------------------------------------------------------------
 
 /**
- * Mirrors the corpus's own configuration where it matters: `NodeNext` resolution plus
- * the `@zod/source` custom condition, which is how the repo's exports map points
- * self-references such as `zod/v4` back at `src/*.ts`.
+ * Resolve the corpus package's own `tsconfig.json` instead of re-declaring its
+ * compiler options. The earlier hand-mirrored literal had drifted from the
+ * frozen repo (`strict: false` versus the repo's `strict: true`, plus missing
+ * jsx/decorator settings), so the semantic side was a different program than
+ * the one the corpus is authored against. The resolved options and the config
+ * bytes are recorded in the report; module resolution can no longer silently
+ * diverge from the corpus.
  */
-const COMPILER_OPTIONS = {
-  module: ts.ModuleKind.NodeNext,
-  moduleResolution: ts.ModuleResolutionKind.NodeNext,
-  customConditions: ['@zod/source'],
-  target: ts.ScriptTarget.ES2020,
-  lib: ['lib.es2020.d.ts', 'lib.dom.d.ts'],
-  types: [],
-  strict: false,
-  skipLibCheck: true,
-  noEmit: true,
-  esModuleInterop: true,
-  allowJs: false,
-  resolveJsonModule: true,
-  forceConsistentCasingInFileNames: true,
+const CORPUS_TSCONFIG = join(CORPUS_ROOT, '..', 'tsconfig.json')
+
+function loadCorpusCompilerOptions(tsconfigPath) {
+  const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile)
+  if (configFile.error) {
+    throw new Error(`cannot read corpus tsconfig ${tsconfigPath}: ${ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n')}`)
+  }
+  const parsed = ts.parseJsonConfigFileContent(
+    configFile.config, ts.sys, dirname(tsconfigPath), undefined, tsconfigPath,
+  )
+  if (parsed.errors.length > 0) {
+    throw new Error(`corpus tsconfig ${tsconfigPath} has errors: ${parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('; ')}`)
+  }
+  // `noEmit` is asserted even though the repo already sets it: the probe must
+  // never be able to write into the frozen corpus.
+  return { path: tsconfigPath, options: { ...parsed.options, noEmit: true }, fileNames: parsed.fileNames }
 }
 
 /** Resolve a call's callee the way a type-aware analysis would. */
@@ -177,9 +181,18 @@ async function main() {
   const cleanup = []
   try {
     // ---- semantic side ----------------------------------------------------
+    // Options come from the corpus tsconfig; root files stay the frozen corpus
+    // `src` set so the program scope cannot silently grow beyond the corpus.
+    const corpusCompiler = loadCorpusCompilerOptions(CORPUS_TSCONFIG)
+    report.compiler = {
+      tsconfig: `node_modules/.cache/m5-eval/corpus/zod-${COMMIT}/packages/zod/tsconfig.json`,
+      tsconfigSha256: sha256(await readFile(CORPUS_TSCONFIG)),
+      options: corpusCompiler.options,
+      note: 'resolved with ts.readConfigFile + ts.parseJsonConfigFileContent from the corpus itself; root files are still the frozen corpus src set',
+    }
     const rootFiles = await collectFiles(CORPUS_ROOT)
     const t0 = performance.now()
-    const program = ts.createProgram(rootFiles, COMPILER_OPTIONS)
+    const program = ts.createProgram(rootFiles, corpusCompiler.options)
     const checker = program.getTypeChecker()
     report.corpus.fileCount = rootFiles.length
     report.program = {
@@ -200,16 +213,17 @@ async function main() {
     report.program.indexedCorpusSources = sourceFilesByRel.size
 
     // ---- heuristic side: real product tool --------------------------------
+    const corpusIdentity = await loadCorpusManifest()
     const ctx = await makeRegistry()
-    cleanup.push(() => { try { ctx.dispose() } catch { /* noop */ } })
+    cleanup.push(() => ctx.fiber.dispose())
     const parent = await mkdtemp(join(tmpdir(), 'm5-semprobe-'))
     cleanup.push(() => rm(parent, { recursive: true, force: true }))
-    const root = join(parent, 'src')
-    await cp(CORPUS_ROOT, root, { recursive: true })
-    await ctx.get('workspaceRegistry').create(root)
+    const root = await mountCorpus(ctx, join(parent, 'src'), corpusIdentity.manifest)
     await mountRetrievalTools(ctx, root, { includeSearch: false })
-    await ctx.plugin(codeIntelligenceApply, { deploymentRoot: '.', revision: COMMIT })
+    const codeIntelligence = await loadCodeIntelligence()
+    await ctx.plugin(codeIntelligence.apply, EVALUATION_CODE_INTELLIGENCE_CONFIG)
 
+    const { SessionId, ToolCallId } = ctx.evaluationHostApis
     const session = ctx.sessions.prepare(SessionId('m5-semantic-probe'), { meta: { cwd: root } })
     cleanup.push(ctx.sessions.enter(session))
     ctx.sessions.announce(session)
@@ -367,7 +381,7 @@ async function main() {
         }
         ts.forEachChild(sf, visit)
         const resolved = specifiers.map((spec) => {
-          const r = ts.resolveModuleName(spec, sf.fileName, COMPILER_OPTIONS, ts.sys).resolvedModule
+          const r = ts.resolveModuleName(spec, sf.fileName, corpusCompiler.options, ts.sys).resolvedModule
           return { specifier: spec, resolvedPath: r ? relPath(r.resolvedFileName) : null, external: r?.isExternalLibraryImport ?? null }
         })
         goldSamples.imports.push({ id: sample.id, path, heuristicTargets: sample.expected.map((e) => e.target.specifier ?? e.target.name), semanticResolved: resolved })
@@ -461,6 +475,7 @@ async function main() {
       'The frozen gold asserts resolution "syntactic"|"heuristic" and target.kind "unresolved". A semantic extractor emits resolved file/symbol targets, so it would fail the frozen gold by construction: any accuracy number computed against this gold cannot compare semantic quality.',
       'Unresolved call sites are inflated by packages absent from the corpus checkout (vitest, @types/node). See envConfound.',
       'Symbol resolution is name-driven and lazy; no project reference build or lib type-checking is forced, so the semantic side is a lower bound on what a full LSP session would resolve.',
+      'TypeScript options come from the corpus tsconfig via ts.readConfigFile/parseJsonConfigFileContent. Reports generated before this change used a hand-mirrored literal (strict:false, no jsx/decorators); a re-run under the corpus options reproduced every headline count here (declarations 10/10, globalCallAnalysis, divergences), so the newer reports are the ones to cite.',
     ]
     report.ok = true
     report.totalMs = Math.round(performance.now() - t0)

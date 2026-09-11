@@ -102,7 +102,10 @@ edit                      59 /  967      context_repo_map          683 / 518
 write                     42 /  686      context_refresh_snapshot  487 /  33
 ```
 
-按 `/4` 字符≈token 估算（预注册的同一估法）：
+按 `/4` 字符≈token 估算（预注册的同一估法）。**历史运行注意**：旧 harness 的 JSON
+repair 请求未携带 schema，而下表用全部 `modelCalls` 相乘，因此 schema 合计是上界、不是精确
+请求级测量；数字保留用于复核，不据此更新任何正式结果。修复后的报告逐调用记录
+`carriesToolSchemas`，后续审计必须按该标志求和：
 
 | 臂 | modelCalls | promptTokens | schema tok/次请求 | schema tok 合计 | 占 promptTokens |
 |---|---|---|---|---|---|

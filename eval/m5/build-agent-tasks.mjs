@@ -10,7 +10,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { COMMIT, GOLD_PATH, sha256 } from './lib/harness.mjs'
+import { COMMIT, GOLD_PATH, sha256 } from './harness.mjs'
 
 const OUT_PATH = fileURLToPath(new URL('./agent-tasks.json', import.meta.url))
 

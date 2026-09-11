@@ -25,22 +25,30 @@
  */
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   COMMIT,
   DSH_PROFILE_MODULES,
+  EVALUATION_CODE_INTELLIGENCE_CONFIG,
   REPORT_DIR,
   forwardedPromptSections,
+  loadCodeIntelligence,
+  loadCorpusManifest,
   loadFsSearch,
   makeRegistry,
   mountCorpus,
   mountRetrievalTools,
   sha256,
   systemPromptForTools,
-} from './lib/harness.mjs'
+} from './harness.mjs'
 
 const AS_JSON = process.argv.includes('--json')
-const OUT_PATH = join(REPORT_DIR, 'tool-surface.json')
+// `--out <path>` keeps ad-hoc verification out of the cached evidence directory.
+const OUT_FLAG = process.argv.indexOf('--out')
+if (OUT_FLAG >= 0 && (process.argv[OUT_FLAG + 1] === undefined || process.argv[OUT_FLAG + 1].startsWith('--'))) {
+  throw new Error('--out requires a file path')
+}
+const OUT_PATH = OUT_FLAG >= 0 ? process.argv[OUT_FLAG + 1] : join(REPORT_DIR, 'tool-surface.json')
 
 // Mirrors agent-baseline.mjs so the audit reports the same surface the runs saw.
 const ARMS = {
@@ -82,15 +90,16 @@ const report = {
 }
 
 let registeredOnce = null
+const corpusIdentity = await loadCorpusManifest()
 for (const [arm, spec] of Object.entries(ARMS)) {
   const ctx = await makeRegistry()
   const parent = await mkdtemp(join(tmpdir(), `m5-audit-${arm}-`))
-  const root = await mountCorpus(ctx, join(parent, 'src'))
+  const root = await mountCorpus(ctx, join(parent, 'src'), corpusIdentity.manifest)
   const { module: fsSearch } = await loadFsSearch()
   const { provenance, promptSections } = await mountRetrievalTools(ctx, root, { includeSearch: spec.search, fsSearch })
   if (spec.structured) {
-    const codeIntel = await import('../../lib/index.js')
-    await ctx.plugin(codeIntel.apply, { deploymentRoot: '.', revision: COMMIT })
+    const codeIntel = await loadCodeIntelligence()
+    await ctx.plugin(codeIntel.apply, EVALUATION_CODE_INTELLIGENCE_CONFIG)
   }
   const schemas = ctx.tools.schemas()
   const allowed = schemas
@@ -113,8 +122,10 @@ for (const [arm, spec] of Object.entries(ARMS)) {
     promptSectionsForwarded: forwarded.map((s) => ({ name: s.name, order: s.order })),
     systemPromptChars: systemPrompt.length,
     systemPrompt,
+    evaluationCodeIntelligenceConfig: EVALUATION_CODE_INTELLIGENCE_CONFIG,
   }
   await rm(parent, { recursive: true, force: true })
+  await ctx.fiber.dispose()
 }
 
 report.registeredPromptSections = registeredOnce
@@ -155,7 +166,7 @@ if (AS_JSON) {
   console.log(`sections verbatim in the composed prompt: ${report.findings.sectionsAreVerbatim}`)
 }
 
-await mkdir(REPORT_DIR, { recursive: true })
+await mkdir(dirname(OUT_PATH), { recursive: true })
 const { writeFile } = await import('node:fs/promises')
 await writeFile(OUT_PATH, `${JSON.stringify(report, null, 2)}\n`)
 if (!AS_JSON) console.log(`report: ${OUT_PATH}`)
