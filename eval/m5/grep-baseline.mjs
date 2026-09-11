@@ -110,7 +110,7 @@ const report = {
     engine: '@vscode/ripgrep',
   },
   definitions: {
-    located: 'grep arm: at least one returned match overlaps a gold target span (declaration), the named file (source), or the relation endpoint span/file (relation). structured arm: the context_* tool returned a non-error result whose content matches the gold expectation shape.',
+    located: 'grep arm: declaration -> every expected declaration has a match overlapping its span at its own path; source -> a match overlaps the expected answer span (not merely somewhere in the file); relation -> shared target-token coverage (zero-edge requires no matches). structured arm: declaration -> every expected name returned at its own path; source -> exact text equality; relation -> shared target-token coverage (symbol `contains` edges compared by count because they expose only symbolIds). v1/v2 scored a source hit on any match in the named file; v3 requires the hit to land in the expected region.',
     cost: 'model-facing content bytes = UTF-8 bytes of the ToolRuntime ContentBlock text the model would receive.',
     tokens: 'estimated as ceil(contentBytes / 4); not a provider tokenizer.',
     sourceArm: 'grep cannot return a range; the source arm must also read the whole named file, so fileBytes is reported alongside grep bytes.',
@@ -129,7 +129,7 @@ try {
   const probes = JSON.parse(await readFile(PROBES_PATH, 'utf8'))
   report.probeSchemaVersion = probes.schemaVersion
   report.probeRevision = probes.revision ?? null
-  report.scoring = 'symmetric-target-coverage-v2'
+  report.scoring = 'symmetric-target-coverage-v3'
   const goldById = new Map(gold.samples.map((s) => [s.id, s]))
   const probeIds = probes.probes.map((p) => p.id)
   const goldIds = gold.samples.map((s) => s.id)
@@ -242,9 +242,14 @@ try {
       sortedFirstIsTarget = sorted.length > 0 ? await overlapsAny(sorted[0]) : null
     } else if (sample.category === 'source') {
       const path = sample.request.path
+      const lines = await linesFor(path)
       fileBytes = Buffer.byteLength(await readFile(join(root, ...path.split('/')), 'utf8'), 'utf8')
+      // A grep hit must land in the expected answer region, not merely anywhere
+      // in the named file. "The file was mentioned" is nearly free and would
+      // flatter the grep arm in a metric named `located`.
+      const span = { startOffset: sample.expected.startOffset, endOffset: sample.expected.endOffset }
       targetsTotal = 1
-      targetsHit = matches.some((m) => m.path === path) ? 1 : 0
+      targetsHit = matches.some((m) => m.path === path && matchOverlapsSpan(m, span, lines)) ? 1 : 0
       located = targetsHit === 1
     } else if (sample.relationKind === 'symbol') {
       const span = sample.expected.source
@@ -394,6 +399,7 @@ try {
     'The structured plugin runs with sessionSourceBytes=null, so this single-session sweep cannot let an earlier probe consume a later probe source budget.',
     'grep is line-oriented and reports path+lineNumber+line; it cannot express kind, semantic relation, or an exact byte range, so declaration/source/relation success here is a retrieval-surfacing signal, not a structural-equivalence result.',
     'Declaration grepSortedTop1 sorts matches by (path, lineNumber) and checks the first; raw ripgrep ordering is not a documented contract and was observed to vary between runs (grepTop1 5 or 6 of 8), so grepTop1 is reported for transparency only.',
+    'Source grep `located` requires the hit to overlap the expected span, not just appear in the named file. Structured source `located` still requires exact text equality, so the two are not equivalent: the structured arm must return the bytes, grep must only land in the region.',
     'Source-arm baseline cost excludes the mandatory follow-up whole-file read; deferredWholeFileReadBytes records that additional cost.',
     'Both arms are scored against the same per-sample target set (declaration: every expected name at its own path; relation: every expected edge specifier/name/path, with zero-edge requiring an empty result). File relations were previously only checked for `!isError` on the structured arm; that asymmetry is removed.',
     'Both arms surface target tokens through one shared predicate: identifier-like names must appear on an identifier boundary (so `en` does not score inside `then`, nor `Red` inside `Redux`), while specifiers/paths are matched literally.',

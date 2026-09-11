@@ -161,15 +161,18 @@ That hash is the v1 probe set. Post-review, the file is at `schemaVersion: 2`:
 source probes that name no symbol now use the content-independent anchor `^`
 (v1 used answer-visible keywords such as `string`, the first token of the
 `src-05` gold span), and arm scoring is symmetric target-token coverage
-(`scoring: symmetric-target-coverage-v2`). Both arms now surface target tokens
+(`scoring: symmetric-target-coverage-v3`). Both arms now surface target tokens
 through one shared predicate (`harness.mjs` `textSurfacesToken`): identifier-like
 names must fall on an identifier boundary (so `en` cannot score inside `then`,
 nor `Red` inside `Redux`), while punctuation-bearing specifiers/paths are matched
 literally. For symbol relations the structured arm's symbol-resolution round trip
 is charged for both latency and model-facing bytes
-(`entry.structured.precallBytes`). The report records
-`probeSchemaVersion`, `probeRevision`, and `scoring`; v1 and v2 numbers are not
-comparable.
+(`entry.structured.precallBytes`). Source grep `located` requires the hit to
+overlap the expected answer span (v3), not merely appear anywhere in the named
+file, while the structured source arm must still return the exact bytes — the
+two are intentionally not equivalent and the asymmetry is documented. The report
+records `probeSchemaVersion`, `probeRevision`, and `scoring`; v1/v2/v3 numbers
+are not comparable.
 
 Run:
 
@@ -219,7 +222,13 @@ IDs, storage/domain/workspace, sandbox and FS/search from one DSH profile graph.
 It does not honour `DSH_FS_SEARCH_ENTRY`: the asserted profile entry is pinned.
 The built `context_*` bundle is loaded from its exact bytes through an in-memory
 ESM bridge which remaps its external DSH imports to those same profile module
-entries; no generated bridge is written to disk. Startup requires one DSH
+entries; no generated bridge is written to disk. The remap is applied only at
+real import/export specifier positions, and any `@deepseek-ai/*` dependency that
+is not itself a host package (currently `@deepseek-ai/schemastery`) is taken
+from the copy the host graph already loads, so no shared library is instantiated
+twice in one process. The chosen source for each external is recorded under
+`externalResolution` (`profile-host` / `host-graph` / `own-tree-main`). Startup
+requires one DSH
 generation and canonical Cordis/tools/session/LLM peer identities, failing
 before any provider call on a mismatch. Dry-run prints, and a formal report
 stores, every core module's version, canonical entry/package root, source and

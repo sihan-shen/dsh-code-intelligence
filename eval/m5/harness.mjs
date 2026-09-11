@@ -148,15 +148,19 @@ export async function verifyCorpusTree(root, manifest) {
   const expected = manifest?.files
   if (!Array.isArray(expected)) throw new TypeError('corpus manifest must contain files[]')
   const actual = await manifestFiles(root)
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    const expectedByPath = new Map(expected.map(file => [file.path, file]))
-    const actualByPath = new Map(actual.map(file => [file.path, file]))
-    const added = actual.filter(file => !expectedByPath.has(file.path)).map(file => file.path)
-    const removed = expected.filter(file => !actualByPath.has(file.path)).map(file => file.path)
-    const changed = actual.filter(file => {
-      const wanted = expectedByPath.get(file.path)
-      return wanted !== undefined && (wanted.bytes !== file.bytes || wanted.sha256 !== file.sha256)
-    }).map(file => file.path)
+  // Compare by path key, not by array order: the manifest's own traversal order
+  // (depth-first per directory) is not the global lexicographic order its
+  // `manifestAlgorithm` string advertises, so an order-sensitive diff would fail
+  // or pass for the wrong reason if the manifest were ever regenerated.
+  const expectedByPath = new Map(expected.map(file => [file.path, file]))
+  const actualByPath = new Map(actual.map(file => [file.path, file]))
+  const added = actual.filter(file => !expectedByPath.has(file.path)).map(file => file.path)
+  const removed = expected.filter(file => !actualByPath.has(file.path)).map(file => file.path)
+  const changed = actual.filter(file => {
+    const wanted = expectedByPath.get(file.path)
+    return wanted !== undefined && (wanted.bytes !== file.bytes || wanted.sha256 !== file.sha256)
+  }).map(file => file.path)
+  if (added.length > 0 || removed.length > 0 || changed.length > 0) {
     throw new Error(`corpus manifest mismatch (added=${added.length}, removed=${removed.length}, changed=${changed.length})`)
   }
   const totalBytes = actual.reduce((sum, file) => sum + file.bytes, 0)
@@ -329,6 +333,17 @@ export function jsonRepairRequest({ model, messages, wireTools, maxOutputTokens 
 // so canonical peer package identities are asserted before any provider work.
 // ---------------------------------------------------------------------------
 
+// Resolve a package to the file Node's ESM loader would pick for it, so a
+// shared library is loaded once even when `main` points at a CJS build.
+async function esmEntryOf(packageJson) {
+  const metadata = JSON.parse(await readFile(packageJson, 'utf8'))
+  const dir = dirname(packageJson)
+  const root = metadata.exports?.['.'] ?? metadata.exports
+  if (root !== null && typeof root === 'object' && typeof root.import === 'string') return realpath(join(dir, root.import))
+  if (typeof metadata.module === 'string') return realpath(join(dir, metadata.module))
+  return realpath(join(dir, metadata.main ?? 'lib/index.js'))
+}
+
 async function packageRecord(packageJson, source) {
   const canonicalPackageJson = await realpath(packageJson)
   const metadata = JSON.parse(await readFile(canonicalPackageJson, 'utf8'))
@@ -394,26 +409,54 @@ export async function resolveEvaluationHost() {
     const byShortName = Object.fromEntries(records.map(record => [record.name.slice('@deepseek-ai/'.length), record]))
     const codeIntelEntry = await realpath(join(PKG_ROOT, 'lib/index.js'))
     const source = await readFile(codeIntelEntry, 'utf8')
-    const externalSpecifiers = [...new Set([...source.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]))]
+    const externalSpecifiers = [...new Set([...source.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'])([^"']+)\1/g)].map(match => match[2]))]
       .filter(specifier => !specifier.startsWith('node:'))
     const codeIntelRequire = createRequire(codeIntelEntry)
+    const hostRequire = createRequire(join(DSH_PROFILE_MODULES, 'dsh-tools', 'package.json'))
     const externalMappings = {}
+    const externalResolution = {}
     for (const specifier of externalSpecifiers) {
       const hostName = specifier.startsWith('@deepseek-ai/') ? specifier.slice('@deepseek-ai/'.length) : null
-      const target = hostName !== null && byShortName[hostName] !== undefined
-        ? byShortName[hostName].entry
-        : await realpath(codeIntelRequire.resolve(specifier))
+      let target
+      if (hostName !== null && byShortName[hostName] !== undefined) {
+        target = byShortName[hostName].entry
+        externalResolution[specifier] = 'profile-host'
+      } else if (specifier.startsWith('@deepseek-ai/')) {
+        // A DSH-scoped library that is not itself a host package (e.g.
+        // `@deepseek-ai/schemastery`): prefer the copy the host graph already
+        // loads, so the library is not instantiated twice in one process.
+        let packageJson = null
+        for (const [origin, resolveFrom] of [['host-graph', hostRequire], ['own-tree', codeIntelRequire]]) {
+          try { packageJson = await realpath(resolveFrom.resolve(`${specifier}/package.json`)); externalResolution[specifier] = origin; break } catch { /* try next */ }
+        }
+        target = packageJson !== null ? await esmEntryOf(packageJson) : await realpath(codeIntelRequire.resolve(specifier))
+        if (packageJson === null) externalResolution[specifier] = 'own-tree-main'
+      } else {
+        // The bundle's own non-DSH dependency (workspace package, typescript,
+        // picomatch): resolve from its tree exactly as before.
+        target = await realpath(codeIntelRequire.resolve(specifier))
+        externalResolution[specifier] = 'own-tree-main'
+      }
       externalMappings[specifier] = pathToFileURL(target).href
     }
-    let bridgedSource = source
-    for (const [specifier, target] of Object.entries(externalMappings)) {
-      bridgedSource = bridgedSource.replaceAll(`"${specifier}"`, `"${target}"`).replaceAll(`'${specifier}'`, `'${target}'`)
-    }
+    // Remap only real import/export specifier positions. A naive global replace
+    // would also rewrite identical text inside comments or string literals.
+    const importSpecifier = /(?:\bfrom\s*|\bimport\s*\(?\s*)(["'])([^"']+)\1/g
+    const consumed = new Set()
+    const bridgedSource = source.replace(importSpecifier, (full, quote, specifier) => {
+      const target = externalMappings[specifier]
+      if (target === undefined) return full
+      consumed.add(specifier)
+      return full.replace(`${quote}${specifier}${quote}`, `${quote}${target}${quote}`)
+    })
+    const missed = externalSpecifiers.filter(specifier => !consumed.has(specifier))
+    if (missed.length > 0) throw new Error(`evaluation bridge failed to remap: ${missed.join(', ')}`)
     const codeIntelligence = Object.freeze({
       entry: codeIntelEntry,
       sha256: sha256(source),
-      loadingPolicy: 'in-memory-external-remap-to-profile-v1',
+      loadingPolicy: 'in-memory-external-remap-to-profile-v2',
       externalMappings: Object.freeze(externalMappings),
+      externalResolution: Object.freeze(externalResolution),
       moduleUrl: `data:text/javascript;base64,${Buffer.from(bridgedSource).toString('base64')}`,
     })
     const provenance = Object.freeze({
@@ -424,6 +467,7 @@ export async function resolveEvaluationHost() {
         sha256: codeIntelligence.sha256,
         loadingPolicy: codeIntelligence.loadingPolicy,
         externalMappings,
+        externalResolution,
       },
       modules: Object.fromEntries(Object.entries(byShortName).map(([name, record]) => [name, {
         version: record.version,

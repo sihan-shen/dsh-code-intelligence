@@ -1,10 +1,12 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_AGENT_RUN_SEED,
+  DSH_PROFILE_MODULES,
   EVALUATION_CODE_INTELLIGENCE_CONFIG,
   assertEvaluationHostConsistency,
   createAgentRunSchedule,
@@ -64,9 +66,16 @@ describe('M5 comparison harness invariants', () => {
     ])
     expect(host.provenance.modules['dsh-tool-fs'].version).toBe(host.generation)
     expect(host.provenance.modules['dsh-tool-fs-search'].version).toBe(host.generation)
-    expect(host.provenance.codeIntelligence.loadingPolicy).toBe('in-memory-external-remap-to-profile-v1')
+    expect(host.provenance.codeIntelligence.loadingPolicy).toBe('in-memory-external-remap-to-profile-v2')
     expect(host.provenance.codeIntelligence.externalMappings['@deepseek-ai/dsh-tools'])
       .toBe(new URL(`file://${host.provenance.modules['dsh-tools'].entry}`).href)
+    // A shared library reachable from both trees must be taken from the host
+    // graph, or the process instantiates it twice.
+    expect(host.provenance.codeIntelligence.externalResolution['@deepseek-ai/schemastery']).toBe('host-graph')
+    const hostRequire = createRequire(join(DSH_PROFILE_MODULES, 'dsh-tools', 'package.json'))
+    const hostSchemastery = await realpath(hostRequire.resolve('@deepseek-ai/schemastery/package.json'))
+    expect(host.provenance.codeIntelligence.externalMappings['@deepseek-ai/schemastery'])
+      .toBe(new URL(`file://${await realpath(join(dirname(hostSchemastery), 'lib/index.mjs'))}`).href)
   })
 
   it('exposes a usable call-id constructor on the 0.1.3 host (ToolCallId was renamed to CallId)', async () => {
@@ -244,6 +253,9 @@ describe('M5 comparison harness invariants', () => {
   it('verifies exact corpus bytes and rejects changed or added files', async () => {
     const root = await fixture()
     await expect(verifyCorpusTree(root, manifest)).resolves.toMatchObject({ fileCount: 2, totalBytes: 38 })
+    // The check compares by path, not by the manifest's traversal order.
+    const reversed = { ...manifest, files: [...manifest.files].reverse() }
+    await expect(verifyCorpusTree(root, reversed)).resolves.toMatchObject({ fileCount: 2, totalBytes: 38 })
 
     await writeFile(join(root, 'a.ts'), 'changed\n')
     await expect(verifyCorpusTree(root, manifest)).rejects.toThrow('corpus manifest mismatch')

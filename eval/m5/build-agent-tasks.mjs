@@ -197,7 +197,7 @@ const document = {
     answers:
       'Grading is programmatic against answerSpec: exact string equality for text and path, exact integer equality for lines, order-independent set equality for path/name/target sets (compared after trimming and de-duplication).',
     leakage:
-      'No question names a tool or a tool argument. The gold request fields (name/kind/pathPrefix/offsets/lineRange/types) are restated in plain language because they define the task, not the method. Seven v1 questions restated them in the tested tool\'s own vocabulary (UTF-16 code-unit offsets, padding/clamping, named relation types); v2 removes that vocabulary without changing any expected answer.',
+      'No question names a tool or a tool argument. The gold request fields (name/kind/pathPrefix/offsets/lineRange/types) are restated in plain language because they define the task, not the method. Nine v1 questions restated them in the tested tool\'s own vocabulary (UTF-16 code-unit offsets, padding/clamping, named relation types); v2 removes that vocabulary without changing any expected answer.',
     vocabulary:
       'Each task carries a `vocabulary` field. The primary accuracy figure uses only `neutral` tasks; `tool-shaped` tasks are reported as a secondary diagnostic.',
     independence:

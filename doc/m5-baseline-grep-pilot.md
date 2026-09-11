@@ -52,13 +52,25 @@ gold    sha256:cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237
 >    文件型关系（imports/exports/calls）**根本没有正确性检查**（只要不报错就 ok）。v2 让两臂
 >    用同一套目标 token 覆盖判据：声明按“每个期望名字在各自路径上被返回”，关系按“每条期望
 >    边的 specifier/name/path 全部覆盖，零边要求空结果”。因此 `rel-03`（enum 成员）现在正确
->    判 grep 失败（0/3）而结构化通过（3/3）。`scoring` 记为 `symmetric-target-coverage-v2`。
-> 3. **第二轮审阅补修**：grep 臂的目标 token 命中原来用 `String.includes`（子串），而结构化臂
+>    判 grep 失败（0/3）而结构化通过（3/3）。`scoring` 记为 `symmetric-target-coverage-v2`（round 3 后为
+>    `…-v3`，见下）。
+> 3. **round 3 补修**：source 类原先只要 grep 在文件名对应路径上有**任意一行**命中就算 `located`，
+>    而结构化臂要求返回逐字节精确文本——这个不对称**偏向 grep**（“提到该文件”几乎免费）。v3 要求
+>    grep 命中必须与 gold 期望区间（`expected.startOffset/endOffset`）**行级重叠**，即落在答案区域
+>    内。`scoring` 升为 `symmetric-target-coverage-v3`；probes 未改（仍 schemaVersion 2）。
+>    另外 `verifyCorpusTree` 改为按路径比较（不再依赖 manifest 的遍历顺序），且 `leakage` 规则中
+>    被改写的题数由“七”更正为“九”。
+> 4. **第二轮审阅补修**：grep 臂的目标 token 命中原来用 `String.includes`（子串），而结构化臂
 >    用精确集合相等，于是 `en` 会因 `then`/路径段而误命中、`Red` 会因 `Redux` 而误命中——这个
 >    不对称**偏向 grep**。现在两臂共用同一个 token 判据：标识符类 token 必须落在标识符边界上，
 >    specifier/path 类含标点则按字面匹配。另外，symbol 型关系里结构化臂必须先做一次
 >    `context_symbol_query` 解析，原先只计其延时、不计其模型可见字节；现在该前置轮的字节与
 >    延时都计入结构化臂（`entry.structured.precallBytes`）。
+> 5. **host 桥接统一（round 3）**：被测量的 `context_*` bundle 与 DSH host 共享
+>    `@deepseek-ai/schemastery`，但它原先从本包自己的 lockfile 解析，而 host 从其 vendored
+>    树加载——同一进程里会被实例化两次。桥接策略升为 `in-memory-external-remap-to-profile-v2`：
+>    任何 `@deepseek-ai/*` 外部优先取 host 图已加载的那一份（记录在 `externalResolution`），
+>    且只在真正的 import/export 说明符位置改写，不再用全局字符串替换。
 >
 > 本页表格中的 `20/20` 与 `located` 定义属于 **v1 口径**，不是修复后结果；修复后的 Phase 1
 > 必须重新运行并在新报告中引用。可通过 `node eval/m5/grep-baseline.mjs --out <path>` 把验证
