@@ -2,7 +2,7 @@
 // Run after building: node scripts/smoke-m2.mjs
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
-import { buildIndexP0, parseSnapshotConfigP0, repoMapP0, symbolQueryP0, relationQueryP0, expandSourceP0, createVerifiedReaderP0 } from '../lib/index.mjs'
+import { buildIndexP0, parseSnapshotConfigP0, repoMapP0, symbolQueryP0, relationQueryP0, expandSourceP0, createVerifiedReaderP0 } from '../lib/index.js'
 const root = new URL('../', import.meta.url).pathname
 const start = performance.now()
 const index = await buildIndexP0(parseSnapshotConfigP0({ deploymentRoot: root, revision: 'm2-working-tree-smoke' }))
