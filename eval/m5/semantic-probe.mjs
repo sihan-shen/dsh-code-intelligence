@@ -249,6 +249,12 @@ async function main() {
     report.repoMapFiles = fileRecords.length
 
     const heuristicCalls = new Map()
+    // Count every call edge, not only the unresolved ones, so `joinableCallEdges`
+    // is measured rather than asserted: if the extractor ever emitted a
+    // symbol/file-targeted call edge, the probe must notice instead of silently
+    // filtering it out and still reporting zero.
+    let callEdgesTotal = 0
+    let callEdgesJoinable = 0
     for (const file of fileRecords) {
       const edges = []
       let edgeCursor
@@ -258,6 +264,8 @@ async function main() {
         const result = await call('context_relation_query', args, `probe-${file.path}`)
         if (result.isError) throw new Error(`relation_query failed for ${file.path}: ${result.error.message}`)
         for (const edge of result.value.relationships) {
+          callEdgesTotal += 1
+          if (edge.target?.kind === 'symbol' || edge.target?.kind === 'file') callEdgesJoinable += 1
           if (edge.target?.kind === 'unresolved' && typeof edge.target.name === 'string') {
             edges.push({ name: edge.target.name, resolution: edge.resolution })
           }
@@ -343,8 +351,11 @@ async function main() {
       nameCollapseFactor: report.heuristic.distinctHeuristicNames === 0
         ? null
         : Number((semanticTargetsAll.size / report.heuristic.distinctHeuristicNames).toFixed(3)),
-      joinableCallEdges: 0,
-      joinableNote: 'The extractor never emits a call edge with a symbol/file target: addUnresolvedRelation always builds {kind:"unresolved"}. So 100% of call edges are dangling names with no join key, while `contains` edges are symbol-linked. Reverse queries (which symbols call X) are structurally impossible.',
+      callEdgesTotal,
+      joinableCallEdges: callEdgesJoinable,
+      joinableNote: callEdgesJoinable === 0
+        ? 'The extractor never emits a call edge with a symbol/file target: addUnresolvedRelation always builds {kind:"unresolved"}. So 100% of call edges are dangling names with no join key, while `contains` edges are symbol-linked. Reverse queries (which symbols call X) are structurally impossible.'
+        : `${callEdgesJoinable}/${callEdgesTotal} call edges carry a symbol/file target, so reverse call queries are not structurally impossible.`,
       topNames: [...byNameGlobal]
         .map(([name, v]) => ({ name, edges: v.edges, distinctTargets: v.distinctTargets.size, unresolvedSites: v.unresolvedSites, samplePaths: v.samplePaths }))
         .filter((x) => x.distinctTargets > 1 || x.unresolvedSites > 0)
@@ -405,14 +416,25 @@ async function main() {
         }
         ts.forEachChild(sf, visit)
         const stars = sample.expected.filter((e) => e.target.specifier !== undefined)
-        goldSamples.exports.push({ id: sample.id, path, heuristicTargets: sample.expected.map((e) => e.target.name ?? e.target.specifier), semanticExportedNames: exported, starSpecifiers })
+        const heuristicTargets = sample.expected.map((e) => e.target.name ?? e.target.specifier)
+        goldSamples.exports.push({ id: sample.id, path, heuristicTargets, semanticExportedNames: exported, starSpecifiers })
+        // The non-star verdict must be computed from the two member sets, not
+        // asserted: a name added or lost on either side would otherwise still
+        // read as "equivalent member set".
+        const heuristicNamed = sample.expected.filter((e) => e.target.name !== undefined).map((e) => e.target.name)
+        const heuristicSet = new Set(heuristicNamed)
+        const semanticSet = new Set(exported.filter((name) => typeof name === 'string'))
+        const heuristicOnly = [...heuristicSet].filter((name) => !semanticSet.has(name)).sort()
+        const semanticOnly = [...semanticSet].filter((name) => !heuristicSet.has(name)).sort()
         divergences.push({
           sample: sample.id, category: 'relation/exports', path,
-          heuristic: `named targets + ${stars.length} unresolved star specifier(s): ${JSON.stringify(sample.expected.map((e) => e.target.name ?? e.target.specifier))}`,
+          heuristic: `named targets + ${stars.length} unresolved star specifier(s): ${JSON.stringify(heuristicTargets)}`,
           semantic: `${exported.length} concretely exported name(s)${starSpecifiers.length ? `; star targets ${JSON.stringify(starSpecifiers)}` : ''}`,
           verdict: stars.length > 0 && exported.length > 0
             ? 'semantic enumerates the star into concrete names the heuristic can only name as a specifier'
-            : 'equivalent member set',
+            : heuristicOnly.length === 0 && semanticOnly.length === 0
+              ? 'equivalent member set (heuristic named exports equal the semantic export set)'
+              : `member sets differ: heuristic-only=${JSON.stringify(heuristicOnly)}, semantic-only=${JSON.stringify(semanticOnly)}`,
         })
       } else if (type === 'calls') {
         const sites = callSitesByFile.get(path) ?? new Map()
@@ -448,14 +470,20 @@ async function main() {
         const node = findNodeBySpan(sf, target.startOffset, target.endOffset)
         const nameNode = node && node.name && ts.isIdentifier(node.name) ? node.name : node
         const symbol = nameNode ? checker.getSymbolAtLocation(nameNode) : undefined
+        const semanticName = symbol ? symbol.getName() : null
         declarationCheck.push({
           id: sample.id,
           path: target.path,
           line: target.start.line,
           goldKind: target.kind,
+          goldName: target.name,
           spanMatched: node !== null,
           nodeKind: node ? ts.SyntaxKind[node.kind] : null,
-          semanticName: symbol ? symbol.getName() : null,
+          semanticName,
+          // A span that resolves to a differently named symbol is not a correct
+          // declaration answer, so the probe records the name comparison rather
+          // than only "a symbol was found at this span".
+          nameMatches: semanticName !== null && semanticName === target.name,
           semanticFlags: symbol ? flagNames(symbol.flags) : null,
         })
       }
@@ -464,6 +492,7 @@ async function main() {
       checked: declarationCheck.length,
       spanMatched: declarationCheck.filter((d) => d.spanMatched).length,
       resolved: declarationCheck.filter((d) => d.semanticFlags !== null).length,
+      nameMatched: declarationCheck.filter((d) => d.nameMatches).length,
       detail: declarationCheck,
     }
 
@@ -495,7 +524,7 @@ async function main() {
         nameCollapseFactor: report.globalCallAnalysis.nameCollapseFactor,
       },
       divergences: divergences.map((d) => `${d.sample}: ${d.verdict}`),
-      declarations: { checked: report.declarations.checked, spanMatched: report.declarations.spanMatched, resolved: report.declarations.resolved },
+      declarations: { checked: report.declarations.checked, spanMatched: report.declarations.spanMatched, resolved: report.declarations.resolved, nameMatched: report.declarations.nameMatched },
     }, null, 2))
   } finally {
     for (const fn of cleanup.reverse()) { try { await fn() } catch { /* noop */ } }

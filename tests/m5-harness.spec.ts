@@ -179,6 +179,30 @@ describe('M5 comparison harness invariants', () => {
     expect(harness).not.toMatch(/^import[^\n]*from\s+['"]@deepseek-ai\//m)
   })
 
+  it('scores Phase 1 relation identity instead of asserting it', async () => {
+    const packageRoot = fileURLToPath(new URL('..', import.meta.url))
+    const grep = await readFile(join(packageRoot, 'eval/m5/grep-baseline.mjs'), 'utf8')
+    // `contains` edges carry only symbolIds, so the harness must resolve them
+    // through the product lookup and score member names, not edge count.
+    expect(grep).toMatch(/context_symbol_query/)
+    expect(grep).toMatch(/deferredSymbolResolveBytes/)
+    expect(grep).toMatch(/symmetric-target-coverage-v4/)
+    expect(grep).not.toMatch(/Math\.min\(relationships\.length, want\.length\)/)
+
+    const probe = await readFile(join(packageRoot, 'eval/m5/semantic-probe.mjs'), 'utf8')
+    // Diagnostic verdicts must be computed from the data, never hardcoded.
+    expect(probe).toMatch(/heuristicOnly\.length === 0 && semanticOnly\.length === 0/)
+    expect(probe).toMatch(/nameMatches: semanticName !== null/)
+    expect(probe).toMatch(/joinableCallEdges: callEdgesJoinable/)
+    expect(probe).not.toMatch(/joinableCallEdges: 0/)
+
+    const audit = await readFile(join(packageRoot, 'eval/m5/audit-tool-surface.mjs'), 'utf8')
+    // `pluginInjectsOwnPrompt` must mean a forwarded prompt section, not merely
+    // "context tools are exposed".
+    expect(audit).toMatch(/structuredPromptSections\.length > 0/)
+    expect(audit).toMatch(/structuredToolsExposed/)
+  })
+
   it('derives the same target-token requirement for both Phase 1 arms', () => {
     expect(expectedTargetTokens({
       category: 'declaration',

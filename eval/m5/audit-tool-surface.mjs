@@ -142,8 +142,16 @@ report.findings.forwardedMatrix = Object.fromEntries(
 report.findings.sectionsAreVerbatim = report.expectedSections
   .filter((s) => report.arms.default.promptSectionsForwarded.some((f) => f.name === s.name))
   .every((s) => report.arms.default.systemPrompt.includes(s.text))
-report.findings.pluginInjectsOwnPrompt = Object.keys(report.arms.additive.perTool).filter((n) => n.startsWith('context_')).length > 0
-  && report.arms.default.promptSectionsForwarded.every((s) => !s.name.startsWith('context:'))
+// Whether the product itself pushes a preference for the context_* tools into
+// the prompt. "pluginInjectsOwnPrompt" must mean *prompt*, not "the tools are
+// exposed": a systemPrompt/tool-description directive would appear as a
+// forwarded `tool:context_*` section. The additive arm exposing context_* tools
+// is reported separately as `structuredToolsExposed`.
+report.findings.structuredPromptSections = Object.values(report.arms)
+  .flatMap((d) => d.promptSectionsForwarded.map((s) => s.name))
+  .filter((n) => n.startsWith('tool:context_'))
+report.findings.structuredToolsExposed = Object.keys(report.arms.additive.perTool).filter((n) => n.startsWith('context_'))
+report.findings.pluginInjectsOwnPrompt = report.findings.structuredPromptSections.length > 0
 
 if (AS_JSON) {
   console.log(JSON.stringify(report, null, 2))
@@ -164,6 +172,8 @@ if (AS_JSON) {
   }
   console.log(`\nforwarded per arm: ${JSON.stringify(report.findings.forwardedMatrix)}`)
   console.log(`sections verbatim in the composed prompt: ${report.findings.sectionsAreVerbatim}`)
+  console.log(`structured tools exposed (additive): ${report.findings.structuredToolsExposed.join(', ') || '(none)'}`)
+  console.log(`structured prompt sections forwarded (any arm): ${report.findings.structuredPromptSections.join(', ') || '(none)'} -> pluginInjectsOwnPrompt=${report.findings.pluginInjectsOwnPrompt}`)
 }
 
 await mkdir(dirname(OUT_PATH), { recursive: true })

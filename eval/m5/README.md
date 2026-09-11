@@ -161,17 +161,23 @@ That hash is the v1 probe set. Post-review, the file is at `schemaVersion: 2`:
 source probes that name no symbol now use the content-independent anchor `^`
 (v1 used answer-visible keywords such as `string`, the first token of the
 `src-05` gold span), and arm scoring is symmetric target-token coverage
-(`scoring: symmetric-target-coverage-v3`). Both arms now surface target tokens
+(`scoring: symmetric-target-coverage-v4`). Both arms now surface target tokens
 through one shared predicate (`harness.mjs` `textSurfacesToken`): identifier-like
 names must fall on an identifier boundary (so `en` cannot score inside `then`,
 nor `Red` inside `Redux`), while punctuation-bearing specifiers/paths are matched
 literally. For symbol relations the structured arm's symbol-resolution round trip
 is charged for both latency and model-facing bytes
-(`entry.structured.precallBytes`). Source grep `located` requires the hit to
+(`entry.structured.precallBytes`). A `contains` result carries only target
+symbolIds, so v4 resolves each distinct symbolId through
+`context_symbol_query({snapshotId, symbolId})` and scores member **names**, not
+just the edge count; those lookups are reported as deferred cost
+(`entry.structured.deferredResolveBytes/deferredResolveMs`,
+`summary.structured.deferredSymbolResolve*`) and are not charged to the measured
+structured bytes/ms. Source grep `located` requires the hit to
 overlap the expected answer span (v3), not merely appear anywhere in the named
 file, while the structured source arm must still return the exact bytes — the
 two are intentionally not equivalent and the asymmetry is documented. The report
-records `probeSchemaVersion`, `probeRevision`, and `scoring`; v1/v2/v3 numbers
+records `probeSchemaVersion`, `probeRevision`, and `scoring`; v1/v2/v3/v4 numbers
 are not comparable.
 
 Run:

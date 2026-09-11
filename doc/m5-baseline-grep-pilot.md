@@ -52,8 +52,8 @@ gold    sha256:cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237
 >    文件型关系（imports/exports/calls）**根本没有正确性检查**（只要不报错就 ok）。v2 让两臂
 >    用同一套目标 token 覆盖判据：声明按“每个期望名字在各自路径上被返回”，关系按“每条期望
 >    边的 specifier/name/path 全部覆盖，零边要求空结果”。因此 `rel-03`（enum 成员）现在正确
->    判 grep 失败（0/3）而结构化通过（3/3）。`scoring` 记为 `symmetric-target-coverage-v2`（round 3 后为
->    `…-v3`，见下）。
+>    判 grep 失败（0/3）而结构化通过（3/3）。`scoring` 记为 `symmetric-target-coverage-v2`（round 3/4 后为
+>    `…-v3`/`…-v4`，见下）。
 > 3. **round 3 补修**：source 类原先只要 grep 在文件名对应路径上有**任意一行**命中就算 `located`，
 >    而结构化臂要求返回逐字节精确文本——这个不对称**偏向 grep**（“提到该文件”几乎免费）。v3 要求
 >    grep 命中必须与 gold 期望区间（`expected.startOffset/endOffset`）**行级重叠**，即落在答案区域
@@ -71,6 +71,17 @@ gold    sha256:cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237
 >    树加载——同一进程里会被实例化两次。桥接策略升为 `in-memory-external-remap-to-profile-v2`：
 >    任何 `@deepseek-ai/*` 外部优先取 host 图已加载的那一份（记录在 `externalResolution`），
 >    且只在真正的 import/export 说明符位置改写，不再用全局字符串替换。
+> 6. **第四轮审阅补修**：`contains` 型 symbol 关系的结果只带 `target.symbolId`（无名字），v3 因此
+>    只比较**边数**：结构化臂即使返回 3 个错误的成员名也能通过，而 grep 臂必须真正显示出成员名——
+>    这仍**偏向结构化**。v4 在测量调用之后，用产品自己的 `context_symbol_query({snapshotId, symbolId})`
+>    把每个不同 symbolId 解析成名字，按**名字集合**判 `located`，不再按边数放行。这些解析是
+>    “评分用”的延迟成本，单列为 `entry.structured.deferredResolveBytes/deferredResolveMs` 与
+>    `summary.structured.deferredSymbolResolve*`（对齐 grep 臂必须整读文件的 deferred 处理），**不计入**
+>    被测字节/耗时。`scoring` 升为 `symmetric-target-coverage-v4`。同一轮还把语义探针里三处
+>    **断言而非计算**的结论改为计算：非星号 exports 的“等价成员集”由两侧集合比较得出、声明解析新增
+>    `nameMatched`（span 命中但名字不同的不算正确答案）、`joinableCallEdges` 由实测调用边统计得出，
+>    并修正 `audit-tool-surface.mjs` 里 `pluginInjectsOwnPrompt` 的语义（只代表“转发了 `tool:context_*`
+>    提示段”，工具是否暴露另记为 `structuredToolsExposed`）。
 >
 > 本页表格中的 `20/20` 与 `located` 定义属于 **v1 口径**，不是修复后结果；修复后的 Phase 1
 > 必须重新运行并在新报告中引用。可通过 `node eval/m5/grep-baseline.mjs --out <path>` 把验证

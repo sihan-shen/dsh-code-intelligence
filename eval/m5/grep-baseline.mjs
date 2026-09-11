@@ -110,7 +110,7 @@ const report = {
     engine: '@vscode/ripgrep',
   },
   definitions: {
-    located: 'grep arm: declaration -> every expected declaration has a match overlapping its span at its own path; source -> a match overlaps the expected answer span (not merely somewhere in the file); relation -> shared target-token coverage (zero-edge requires no matches). structured arm: declaration -> every expected name returned at its own path; source -> exact text equality; relation -> shared target-token coverage (symbol `contains` edges compared by count because they expose only symbolIds). v1/v2 scored a source hit on any match in the named file; v3 requires the hit to land in the expected region.',
+    located: 'grep arm: declaration -> every expected declaration has a match overlapping its span at its own path; source -> a match overlaps the expected answer span (not merely somewhere in the file); relation -> shared target-token coverage (zero-edge requires no matches). structured arm: declaration -> every expected name returned at its own path; source -> exact text equality; relation -> shared target-token coverage, with symbol `contains` edges resolved by symbolId to member names for scoring. v1/v2 scored a source hit on any match in the named file; v3 requires the hit to land in the expected region; v4 resolves `contains` symbolIds instead of accepting count equality.',
     cost: 'model-facing content bytes = UTF-8 bytes of the ToolRuntime ContentBlock text the model would receive.',
     tokens: 'estimated as ceil(contentBytes / 4); not a provider tokenizer.',
     sourceArm: 'grep cannot return a range; the source arm must also read the whole named file, so fileBytes is reported alongside grep bytes.',
@@ -129,7 +129,7 @@ try {
   const probes = JSON.parse(await readFile(PROBES_PATH, 'utf8'))
   report.probeSchemaVersion = probes.schemaVersion
   report.probeRevision = probes.revision ?? null
-  report.scoring = 'symmetric-target-coverage-v3'
+  report.scoring = 'symmetric-target-coverage-v4'
   const goldById = new Map(gold.samples.map((s) => [s.id, s]))
   const probeIds = probes.probes.map((p) => p.id)
   const goldIds = gold.samples.map((s) => s.id)
@@ -199,7 +199,7 @@ try {
   await call('context_repo_map', {}, 'baseline-warm')
   report.warmRepoMapMs = Math.round(performance.now() - warmStart)
 
-  const totals = { grep: { located: 0, bytes: 0, ms: 0 }, structured: { located: 0, bytes: 0, ms: 0 } }
+  const totals = { grep: { located: 0, bytes: 0, ms: 0 }, structured: { located: 0, bytes: 0, ms: 0, deferredResolveBytes: 0, deferredResolveMs: 0 } }
   const byCategory = {}
 
   for (const probe of probes.probes) {
@@ -317,6 +317,9 @@ try {
     let structuredOk = !structuredResult.isError
     let structuredTargetsHit = null
     let structuredTargetsTotal = null
+    let structuredDeferredResolveBytes = 0
+    let structuredDeferredResolveMs = 0
+    let structuredResolvedNames = null
     if (structuredOk && sample.category === 'declaration') {
       // Coverage, not count: every expected declaration must come back at its
       // own path with its own name, so a same-length wrong answer fails.
@@ -334,10 +337,28 @@ try {
       const relationships = structuredResult.value.relationships ?? []
       structuredTargetsTotal = want.length
       if (sample.relationKind === 'symbol') {
-        // `contains` edges expose only target symbolIds, so the shared token set
-        // is not comparable here; count equality is the strongest check available.
-        structuredTargetsHit = Math.min(relationships.length, want.length)
-        structuredOk = relationships.length === want.length
+        // `contains` edges expose only target symbolIds, so member identity is not
+        // in the measured payload. Resolve every distinct symbolId through the
+        // product's own direct lookup so `located` verifies member identity, not
+        // merely the edge count. Mirrors the grep arm's mandatory whole-file read:
+        // the lookups are reported as deferred cost and are never folded into the
+        // measured structured bytes/ms.
+        const targetIds = [...new Set(relationships.map((edge) => edge.target?.symbolId).filter((id) => typeof id === 'string'))]
+        const names = []
+        let resolveFailures = 0
+        for (const symbolId of targetIds) {
+          const lookupStart = performance.now()
+          const resolved = await call('context_symbol_query', { snapshotId, symbolId }, `ctx-resolve-${probe.id}`)
+          structuredDeferredResolveMs += performance.now() - lookupStart
+          if (resolved.isError) { resolveFailures += 1; continue }
+          structuredDeferredResolveBytes += contentBytes(resolved)
+          const name = resolved.value.matches?.[0]?.name
+          if (typeof name === 'string') names.push(name)
+        }
+        structuredResolvedNames = names
+        structuredTargetsHit = want.filter((token) => names.includes(token)).length
+        structuredOk = relationships.every((edge) => typeof edge.target?.symbolId === 'string') && relationships.length === want.length
+          && resolveFailures === 0 && structuredTargetsHit === want.length
       } else {
         const returnedTokens = relationTargetTokens(relationships)
         structuredTargetsHit = want.filter((token) => returnedTokens.includes(token)).length
@@ -349,6 +370,9 @@ try {
       tool: structuredArgs.name, ok: structuredOk, contentBytes: structuredBytes,
       tokensEst: tokensEst(structuredBytes), ms: structuredMs,
       precallBytes: structuredPrecallBytes,
+      deferredResolveBytes: structuredDeferredResolveBytes,
+      deferredResolveMs: Math.round(structuredDeferredResolveMs),
+      resolvedNames: structuredResolvedNames,
       targetsHit: structuredTargetsHit, targetsTotal: structuredTargetsTotal,
       error: structuredResult.isError ? structuredResult.error.message : null,
     }
@@ -357,6 +381,8 @@ try {
     totals.grep.ms += grepMs
     totals.structured.bytes += structuredBytes
     totals.structured.ms += structuredMs
+    totals.structured.deferredResolveBytes += structuredDeferredResolveBytes
+    totals.structured.deferredResolveMs += structuredDeferredResolveMs
     if (located) totals.grep.located += 1
     if (structuredOk) totals.structured.located += 1
 
@@ -376,7 +402,7 @@ try {
   report.summary = {
     samples: n,
     grep: { located: totals.grep.located, total: n, meanContentBytes: Math.round(totals.grep.bytes / n), meanTokensEst: tokensEst(Math.round(totals.grep.bytes / n)), meanMs: Math.round(totals.grep.ms / n) },
-    structured: { located: totals.structured.located, total: n, meanContentBytes: Math.round(totals.structured.bytes / n), meanTokensEst: tokensEst(Math.round(totals.structured.bytes / n)), meanMs: Math.round(totals.structured.ms / n) },
+    structured: { located: totals.structured.located, total: n, meanContentBytes: Math.round(totals.structured.bytes / n), meanTokensEst: tokensEst(Math.round(totals.structured.bytes / n)), meanMs: Math.round(totals.structured.ms / n), deferredSymbolResolveBytes: Math.round(totals.structured.deferredResolveBytes), deferredSymbolResolveMs: Math.round(totals.structured.deferredResolveMs) },
     byCategory,
     declaration: {
       grepTop1: declSamples.filter((s) => s.grep.firstMatchIsTarget === true).length,
@@ -404,6 +430,7 @@ try {
     'Both arms are scored against the same per-sample target set (declaration: every expected name at its own path; relation: every expected edge specifier/name/path, with zero-edge requiring an empty result). File relations were previously only checked for `!isError` on the structured arm; that asymmetry is removed.',
     'Both arms surface target tokens through one shared predicate: identifier-like names must appear on an identifier boundary (so `en` does not score inside `then`, nor `Red` inside `Redux`), while specifiers/paths are matched literally.',
     'For symbol relations the structured arm pays a symbol-resolution round trip; its latency and model-facing bytes are charged to the structured arm (entry.structured.precallBytes).',
+    'A `contains` relation result carries only target symbolIds, so member identity is not in the measured payload. The harness resolves each distinct symbolId through `context_symbol_query({symbolId})` and scores member names, not just the edge count. Those lookups are deferred cost (summary.structured.deferredSymbolResolve*, entry.structured.deferredResolve*) and are not charged to the measured structured bytes/ms.',
     'Probes were frozen before any run; see probesSha256 and probeRevision. Gold was never read to build a probe.',
   )
 } catch (error) {
@@ -431,5 +458,6 @@ if (!report.ok) {
   console.log(`declaration: grepSortedTop1 ${summary.declaration.grepSortedTop1}/${summary.declaration.total}, matches ${summary.declaration.returnedMatches} for ${summary.declaration.goldTargets} targets`)
   console.log(`startup: grep ${report.grepStartupMs}ms vs structured plugin load ${report.structuredPluginLoadMs}ms; cold repo-map (index build + walk) ${report.coldRepoMapMs}ms, warm ${report.warmRepoMapMs}ms`)
   console.log(`source: grep ${summary.source.grepContentBytes}B + deferred read ${summary.source.deferredWholeFileReadBytes}B vs structured ${summary.source.structuredContentBytes}B`)
+  console.log(`structured deferred symbol resolve: ${summary.structured.deferredSymbolResolveBytes}B / ${summary.structured.deferredSymbolResolveMs}ms (scoring only, not charged)`)
   console.log(`report: ${REPORT_PATH}`)
 }
