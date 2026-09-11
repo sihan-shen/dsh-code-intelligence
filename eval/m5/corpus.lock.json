@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "repository": {
+    "url": "https://github.com/colinhacks/zod.git",
+    "tag": "v4.4.3",
+    "commit": "1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "archiveUrl": "https://codeload.github.com/colinhacks/zod/tar.gz/1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "archiveFile": "zod-v4.4.3-1fb56a5c18c27102dbc92260a4007c7732a0ccca.tar.gz",
+    "archiveSha256": "48e2438edf0294d148b8a06cb5f1954e99aa17ecbb79bef036253cfd2b37f777",
+    "archiveBytes": 9862635,
+    "licensePath": "LICENSE",
+    "licenseSha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8"
+  },
+  "corpus": {
+    "archiveRoot": "zod-1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "scanRoot": "packages/zod/src",
+    "preparedRoot": "node_modules/.cache/m5-eval/corpus/zod-1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "manifestFile": "node_modules/.cache/m5-eval/corpus-manifest.json",
+    "filters": {
+      "include": "all regular files below packages/zod/src",
+      "exclude": ["node_modules", "dist", "build", ".git", "coverage"]
+    },
+    "manifestAlgorithm": "sha256-per-file, lexicographic POSIX relative paths",
+    "capacity": {
+      "maxFiles": null,
+      "maxBytes": null,
+      "truncated": false
+    }
+  },
+  "license": {
+    "name": "MIT",
+    "source": "repository root LICENSE",
+    "localFile": "node_modules/.cache/m5-eval/licenses/zod-v4.4.3-LICENSE"
+  }
+}

@@ -12,7 +12,7 @@ it('exposes the built plugin entry and package metadata', async () => {
   expect(plugin.name).toBe('dsh-code-intelligence')
   expect(typeof plugin.apply).toBe('function')
   expect(plugin.Config).toBeDefined()
-  // M2 default is P0; V1 programmatic exports remain explicit.
+  // The default plugin uses P0; V1 programmatic exports remain explicit.
   expect(typeof plugin.buildIndexP0).toBe('function')
   expect(typeof plugin.createTypeScriptAstExtractorP0).toBe('function')
   expect(typeof plugin.parseSnapshotConfigP0).toBe('function')

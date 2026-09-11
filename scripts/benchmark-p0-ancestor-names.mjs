@@ -28,7 +28,7 @@ if (process.argv[2] !== '--child') {
     await rm(root, { recursive: true, force: true })
   }
 } else {
-  const { buildIndexP0, parseSnapshotConfigP0 } = await import('../lib/index.mjs')
+  const { buildIndexP0, parseSnapshotConfigP0 } = await import('../lib/index.js')
   const variables = Number(process.argv[4])
   const started = performance.now()
   const index = await buildIndexP0(parseSnapshotConfigP0({ deploymentRoot: process.argv[3], revision: 'ancestor-benchmark-v1' }))

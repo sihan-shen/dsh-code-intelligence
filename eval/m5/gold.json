@@ -1,0 +1,691 @@
+{
+  "schemaVersion": 1,
+  "purpose": "M5 independent gold: 8 declaration-location, 6 source-read, 6 relation samples over the fixed Zod corpus. Offsets are UTF-16 half-open; lines are 1-based; lineRange is terminator-inclusive.",
+  "corpus": {
+    "repository": "https://github.com/colinhacks/zod.git",
+    "tag": "v4.4.3",
+    "commit": "1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "scanRoot": "packages/zod/src",
+    "archiveSha256": "48e2438edf0294d148b8a06cb5f1954e99aa17ecbb79bef036253cfd2b37f777",
+    "manifestFileCount": 286,
+    "manifestTotalBytes": 2237613,
+    "manifestSha256": "4c0163813c75174b96e808252b033b1074e82dcc9b0a460edd98e6ce85eefdc6"
+  },
+  "rules": {
+    "coordinates": "UTF-16 code-unit half-open [startOffset, endOffset); positions are 1-based line / 0-based column; lineRange endOffset includes the endLine terminator and paddingLines clamps to file bounds.",
+    "declarationMatch": "exact mode; for matchMode \"unique\" the result must contain exactly one target; for \"same-name-set\" the full result set must equal expectedTargets (all gold targets, no extras); recall@5 is reported and must be 1 when target count <= 5.",
+    "sourceMatch": "expandSourceP0 response startOffset/endOffset/start/end/text must equal gold exactly; text.length === endOffset - startOffset.",
+    "relationMatch": "file-source: compare returned edge set keyed by (type, canonicalJson(target)) after filtering request.types; exact=true requires set equality with expected. symbol-source contains: resolve from-symbol and every target symbol to their symbolIds and assert contains edges; target path/name/spans must equal gold."
+  },
+  "review": {
+    "method": "Read-only independent subagent inspected raw corpus source and proposed the samples; the parent recomputed every offset and sha256 from raw bytes, confirmed all 10 declaration spans against the TypeScript compiler AST (ts 5.9.3), verified tree-wide declaration uniqueness, and re-read every relation source. The package extractor/build/query were never used to produce or adjust gold.",
+    "humanReviewed": false,
+    "reviewer": "AI subagent (reviewer) + parent agent",
+    "generatedAt": "2026-09-10"
+  },
+  "samples": [
+    {
+      "id": "decl-01-variable-same-name-set",
+      "title": "Same-name set: every declaration named `allowsEval` (destructured binding, nested local, top-level export)",
+      "request": {
+        "name": "allowsEval",
+        "mode": "exact",
+        "kind": "variable"
+      },
+      "matchMode": "same-name-set",
+      "expectedTargets": [
+        {
+          "path": "v4/classic/tests/jitless-allows-eval.test.ts",
+          "name": "allowsEval",
+          "kind": "variable",
+          "startOffset": 114,
+          "endOffset": 124,
+          "start": {
+            "line": 5,
+            "column": 8
+          },
+          "end": {
+            "line": 5,
+            "column": 18
+          },
+          "snippet": "allowsEval",
+          "sourceHash": "sha256:ffa9a32838111e58388ec0d290c612ce318ed379eae43e8faa73c065e286dd21"
+        },
+        {
+          "path": "v4/core/schemas.ts",
+          "name": "allowsEval",
+          "kind": "variable",
+          "startOffset": 61942,
+          "endOffset": 61970,
+          "start": {
+            "line": 2097,
+            "column": 10
+          },
+          "end": {
+            "line": 2097,
+            "column": 38
+          },
+          "snippet": "allowsEval = util.allowsEval",
+          "sourceHash": "sha256:934bc0ff4312a3e86645ea5dccfdb59aa316345035e8394f72d938d98dd6728a"
+        },
+        {
+          "path": "v4/core/util.ts",
+          "name": "allowsEval",
+          "kind": "variable",
+          "startOffset": 11310,
+          "endOffset": 11813,
+          "start": {
+            "line": 364,
+            "column": 13
+          },
+          "end": {
+            "line": 383,
+            "column": 2
+          },
+          "snippet": "allowsEval: { value: boolean } = /* @__PURE__*/ cached(() => {\n  // Skip the probe under `jitless`: strict CSPs report the caught `new Function`\n  // as a `securitypolicyviolation` even though the throw is swallowed.\n  if (globalConfig.jitless) {\n    return false;\n  }\n\n  // @ts-ignore\n  if (typeof navigator !== \"undefined\" && navigator?.userAgent?.includes(\"Cloudflare\")) {\n    return false;\n  }\n\n  try {\n    const F = Function;\n    new F(\"\");\n    return true;\n  } catch (_) {\n    return false;\n  }\n})",
+          "sourceHash": "sha256:f87ed4b568ea38ce1557f965521e999e239c2c82dc6cc9de32da5b3eb802ba4d"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-02-function-unique",
+      "title": "Non-exported function declaration, unique repo-wide",
+      "request": {
+        "name": "fixedBase64",
+        "mode": "exact",
+        "kind": "function"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/core/regexes.ts",
+          "name": "fixedBase64",
+          "kind": "function",
+          "startOffset": 8222,
+          "endOffset": 8365,
+          "start": {
+            "line": 158,
+            "column": 0
+          },
+          "end": {
+            "line": 160,
+            "column": 1
+          },
+          "snippet": "function fixedBase64(bodyLength: number, padding: \"\" | \"=\" | \"==\"): RegExp {\n  return new RegExp(`^[A-Za-z0-9+/]{${bodyLength}}${padding}$`);\n}",
+          "sourceHash": "sha256:47ddb6cf93b4c672e8693a1496d075e75355849609e99cab34bea8f0fb45ec49"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-03-interface-path-prefix",
+      "title": "Exported interface, directory pathPrefix",
+      "request": {
+        "name": "$ZSF",
+        "mode": "exact",
+        "kind": "interface",
+        "pathPrefix": "v4/core"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/core/zsf.ts",
+          "name": "$ZSF",
+          "kind": "interface",
+          "startOffset": 157,
+          "endOffset": 342,
+          "start": {
+            "line": 5,
+            "column": 0
+          },
+          "end": {
+            "line": 12,
+            "column": 1
+          },
+          "snippet": "export interface $ZSF {\n  $zsf: { version: number };\n  type: string;\n  // default value if not defined\n  default: unknown;\n  // fallback value if validation fails\n  fallback: unknown;\n}",
+          "sourceHash": "sha256:975e61b52c8de9fad0a0086952b9ee8a1abbacfa4489659529c53e80dd78094e"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-04-type-non-exported",
+      "title": "Non-exported module-local type alias",
+      "request": {
+        "name": "$ZSFObjectProperties",
+        "mode": "exact",
+        "kind": "type"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/core/zsf.ts",
+          "name": "$ZSFObjectProperties",
+          "kind": "type",
+          "startOffset": 1563,
+          "endOffset": 1687,
+          "start": {
+            "line": 69,
+            "column": 0
+          },
+          "end": {
+            "line": 74,
+            "column": 3
+          },
+          "snippet": "type $ZSFObjectProperties = Array<{\n  key: string;\n  value: $ZSF;\n  format?: \"literal\" | \"pattern\";\n  ordering?: number;\n}>;",
+          "sourceHash": "sha256:975e61b52c8de9fad0a0086952b9ee8a1abbacfa4489659529c53e80dd78094e"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-05-enum-nested",
+      "title": "Enum nested in a test callback, pathPrefix",
+      "request": {
+        "name": "NumberEnum",
+        "mode": "exact",
+        "kind": "enum",
+        "pathPrefix": "v4/classic/tests"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/classic/tests/to-json-schema.test.ts",
+          "name": "NumberEnum",
+          "kind": "enum",
+          "startOffset": 32176,
+          "endOffset": 32230,
+          "start": {
+            "line": 945,
+            "column": 4
+          },
+          "end": {
+            "line": 948,
+            "column": 5
+          },
+          "snippet": "enum NumberEnum {\n      Zero = 0,\n      One = 1,\n    }",
+          "sourceHash": "sha256:eb92782d224aca96076e98197ceca3508216521f94dc23e1c11de08cb8662e6f"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-06-class-unique",
+      "title": "Exported class, unique repo-wide",
+      "request": {
+        "name": "$ZodAsyncError",
+        "mode": "exact",
+        "kind": "class"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/core/core.ts",
+          "name": "$ZodAsyncError",
+          "kind": "class",
+          "startOffset": 2917,
+          "endOffset": 3071,
+          "start": {
+            "line": 98,
+            "column": 0
+          },
+          "end": {
+            "line": 102,
+            "column": 1
+          },
+          "snippet": "export class $ZodAsyncError extends Error {\n  constructor() {\n    super(`Encountered Promise during synchronous parse. Use .parseAsync() instead.`);\n  }\n}",
+          "sourceHash": "sha256:cd7ea3d935d02e3e4057c13870807b189618cf120608569ba253a605dc96c6ee"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-07-method-member",
+      "title": "Class method member, span starts at the name",
+      "request": {
+        "name": "indented",
+        "mode": "exact",
+        "kind": "method"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/core/doc.ts",
+          "name": "indented",
+          "kind": "method",
+          "startOffset": 234,
+          "endOffset": 330,
+          "start": {
+            "line": 12,
+            "column": 2
+          },
+          "end": {
+            "line": 16,
+            "column": 3
+          },
+          "snippet": "indented(fn: (doc: Doc) => void) {\n    this.indent += 1;\n    fn(this);\n    this.indent -= 1;\n  }",
+          "sourceHash": "sha256:496e63b612809bf031a1964bb2e74c1af4c1a4ba1f8e5cd6f164818ea135205a"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "decl-08-enum-member",
+      "title": "Enum member, comma excluded",
+      "request": {
+        "name": "Red",
+        "mode": "exact",
+        "kind": "enum-member",
+        "pathPrefix": "v4/classic/tests"
+      },
+      "matchMode": "unique",
+      "expectedTargets": [
+        {
+          "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+          "name": "Red",
+          "kind": "enum-member",
+          "startOffset": 4739,
+          "endOffset": 4750,
+          "start": {
+            "line": 224,
+            "column": 8
+          },
+          "end": {
+            "line": 224,
+            "column": 19
+          },
+          "snippet": "Red = \"red\"",
+          "sourceHash": "sha256:2c3df06e0757019a6fa226d954653d8627055f723d69c5cc49083cdfa6c1b6a2"
+        }
+      ],
+      "category": "declaration"
+    },
+    {
+      "id": "src-01-whole-file",
+      "title": "wholeFile on a 3-line module (trailing LF, phantom final line)",
+      "request": {
+        "path": "v4-mini/index.ts",
+        "wholeFile": true
+      },
+      "expected": {
+        "startOffset": 0,
+        "endOffset": 99,
+        "start": {
+          "line": 1,
+          "column": 0
+        },
+        "end": {
+          "line": 4,
+          "column": 0
+        },
+        "text": "import * as z from \"../v4/mini/external.js\";\nexport * from \"../v4/mini/external.js\";\nexport { z };\n",
+        "sourceHash": "sha256:92f42fea7c90ec3f2f623a923d8798d2a316cb4ff93d6399084065b9214365de"
+      },
+      "category": "source"
+    },
+    {
+      "id": "src-02-offset-range-declaration",
+      "title": "offsetRange equal to the `version` declaration span",
+      "request": {
+        "path": "v4/core/versions.ts",
+        "offsetRange": {
+          "startOffset": 13,
+          "endOffset": 81
+        },
+        "paddingLines": 0
+      },
+      "expected": {
+        "startOffset": 13,
+        "endOffset": 81,
+        "start": {
+          "line": 1,
+          "column": 13
+        },
+        "end": {
+          "line": 5,
+          "column": 10
+        },
+        "text": "version = {\n  major: 4,\n  minor: 4,\n  patch: 3 as number,\n} as const",
+        "sourceHash": "sha256:847580315b9909d204bdf5feb4dad7f220c226b77c4fad11857b7751bcdb6bdc"
+      },
+      "category": "source"
+    },
+    {
+      "id": "src-03-line-range-padding",
+      "title": "lineRange {5,6} paddingLines 1 expands to lines 4..7",
+      "request": {
+        "path": "v4/core/config.ts",
+        "lineRange": {
+          "startLine": 5,
+          "endLine": 6
+        },
+        "paddingLines": 1
+      },
+      "expected": {
+        "startOffset": 75,
+        "endOffset": 281,
+        "start": {
+          "line": 4,
+          "column": 0
+        },
+        "end": {
+          "line": 8,
+          "column": 0
+        },
+        "text": "  /** Custom error map. Overrides `config().localeError`. */\n  customError?: errors.$ZodErrorMap | undefined;\n  /** Localized error map. Lowest priority. */\n  localeError?: errors.$ZodErrorMap | undefined;\n",
+        "sourceHash": "sha256:3c3ec0c03ee7387685f7a5e0155d9d55f251ffe4cfb5f4447bcbd380aed3d847"
+      },
+      "category": "source"
+    },
+    {
+      "id": "src-04-empty-offset-range",
+      "title": "Zero-length offsetRange at a line terminator",
+      "request": {
+        "path": "v3/helpers/typeAliases.ts",
+        "offsetRange": {
+          "startOffset": 87,
+          "endOffset": 87
+        },
+        "paddingLines": 0
+      },
+      "expected": {
+        "startOffset": 87,
+        "endOffset": 87,
+        "start": {
+          "line": 1,
+          "column": 87
+        },
+        "end": {
+          "line": 1,
+          "column": 87
+        },
+        "text": "",
+        "sourceHash": "sha256:d3cfde44f8089768ebb08098c96d01ca260b88bccf238d55eee93f1c620ff5a5"
+      },
+      "category": "source"
+    },
+    {
+      "id": "src-05-multibyte-line-range",
+      "title": "lineRange over CJK text (UTF-16 offsets, not bytes)",
+      "request": {
+        "path": "v4/locales/ja.ts",
+        "lineRange": {
+          "startLine": 7,
+          "endLine": 10
+        },
+        "paddingLines": 0
+      },
+      "expected": {
+        "startOffset": 269,
+        "endOffset": 428,
+        "start": {
+          "line": 7,
+          "column": 0
+        },
+        "end": {
+          "line": 11,
+          "column": 0
+        },
+        "text": "    string: { unit: \"文字\", verb: \"である\" },\n    file: { unit: \"バイト\", verb: \"である\" },\n    array: { unit: \"要素\", verb: \"である\" },\n    set: { unit: \"要素\", verb: \"である\" },\n",
+        "sourceHash": "sha256:0ed8c9e13577e56e76e7c1ff40933d1ab2231d5816eb7b3627f893d5540ff9eb"
+      },
+      "category": "source"
+    },
+    {
+      "id": "src-06-padding-clamped",
+      "title": "lineRange {1,1} paddingLines 20 clamps to whole file",
+      "request": {
+        "path": "v4/core/versions.ts",
+        "lineRange": {
+          "startLine": 1,
+          "endLine": 1
+        },
+        "paddingLines": 20
+      },
+      "expected": {
+        "startOffset": 0,
+        "endOffset": 83,
+        "start": {
+          "line": 1,
+          "column": 0
+        },
+        "end": {
+          "line": 6,
+          "column": 0
+        },
+        "text": "export const version = {\n  major: 4,\n  minor: 4,\n  patch: 3 as number,\n} as const;\n",
+        "sourceHash": "sha256:847580315b9909d204bdf5feb4dad7f220c226b77c4fad11857b7751bcdb6bdc"
+      },
+      "category": "source"
+    },
+    {
+      "id": "rel-03-contains-nesting",
+      "title": "contains: Colors enum -> 3 members (symbolId query)",
+      "relationKind": "symbol",
+      "request": {
+        "from": {
+          "symbolName": "Colors",
+          "symbolKind": "enum",
+          "symbolPrefix": "v4/classic/tests"
+        },
+        "types": [
+          "contains"
+        ]
+      },
+      "exact": true,
+      "expected": {
+        "source": {
+          "name": "Colors",
+          "kind": "enum",
+          "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+          "startOffset": 4717,
+          "endOffset": 4807,
+          "snippet": "enum Colors {\n        Red = \"red\",\n        Green = \"green\",\n        Blue = \"blue\",\n      }"
+        },
+        "targets": [
+          {
+            "name": "Red",
+            "kind": "enum-member",
+            "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+            "startOffset": 4739,
+            "endOffset": 4750,
+            "start": {
+              "line": 224,
+              "column": 8
+            },
+            "end": {
+              "line": 224,
+              "column": 19
+            },
+            "snippet": "Red = \"red\"",
+            "sourceHash": "sha256:2c3df06e0757019a6fa226d954653d8627055f723d69c5cc49083cdfa6c1b6a2"
+          },
+          {
+            "name": "Green",
+            "kind": "enum-member",
+            "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+            "startOffset": 4760,
+            "endOffset": 4775,
+            "start": {
+              "line": 225,
+              "column": 8
+            },
+            "end": {
+              "line": 225,
+              "column": 23
+            },
+            "snippet": "Green = \"green\"",
+            "sourceHash": "sha256:2c3df06e0757019a6fa226d954653d8627055f723d69c5cc49083cdfa6c1b6a2"
+          },
+          {
+            "name": "Blue",
+            "kind": "enum-member",
+            "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+            "startOffset": 4785,
+            "endOffset": 4798,
+            "start": {
+              "line": 226,
+              "column": 8
+            },
+            "end": {
+              "line": 226,
+              "column": 21
+            },
+            "snippet": "Blue = \"blue\"",
+            "sourceHash": "sha256:2c3df06e0757019a6fa226d954653d8627055f723d69c5cc49083cdfa6c1b6a2"
+          }
+        ]
+      },
+      "category": "relation"
+    },
+    {
+      "id": "rel-01-imports-external",
+      "title": "imports with external bare specifiers",
+      "request": {
+        "from": {
+          "path": "v4/classic/tests/enum.test.ts"
+        },
+        "types": [
+          "imports"
+        ]
+      },
+      "exact": true,
+      "expected": [
+        {
+          "type": "imports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "specifier": "vitest"
+          }
+        },
+        {
+          "type": "imports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "specifier": "zod/v4"
+          }
+        }
+      ],
+      "category": "relation",
+      "relationKind": "file"
+    },
+    {
+      "id": "rel-02-exports-named-and-star",
+      "title": "exports: named `z` and `export *` specifier",
+      "request": {
+        "from": {
+          "path": "v4-mini/index.ts"
+        },
+        "types": [
+          "exports"
+        ]
+      },
+      "exact": true,
+      "expected": [
+        {
+          "type": "exports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "name": "z"
+          }
+        },
+        {
+          "type": "exports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "specifier": "../v4/mini/external.js"
+          }
+        }
+      ],
+      "category": "relation",
+      "relationKind": "file"
+    },
+    {
+      "id": "rel-04-calls-heuristic",
+      "title": "calls: identifier-call heuristic (nested call included)",
+      "request": {
+        "from": {
+          "path": "v4/classic/external.ts"
+        },
+        "types": [
+          "calls"
+        ]
+      },
+      "exact": true,
+      "expected": [
+        {
+          "type": "calls",
+          "resolution": "heuristic",
+          "target": {
+            "kind": "unresolved",
+            "name": "config"
+          }
+        },
+        {
+          "type": "calls",
+          "resolution": "heuristic",
+          "target": {
+            "kind": "unresolved",
+            "name": "en"
+          }
+        }
+      ],
+      "category": "relation",
+      "relationKind": "file"
+    },
+    {
+      "id": "rel-05-zero-edge",
+      "title": "valid fully-indexed file with zero imports",
+      "request": {
+        "from": {
+          "path": "v4/core/versions.ts"
+        },
+        "types": [
+          "imports"
+        ]
+      },
+      "exact": true,
+      "expected": [],
+      "category": "relation",
+      "relationKind": "file"
+    },
+    {
+      "id": "rel-06-type-only-exports",
+      "title": "exports from `export type` declarations",
+      "request": {
+        "from": {
+          "path": "v3/helpers/typeAliases.ts"
+        },
+        "types": [
+          "exports"
+        ]
+      },
+      "exact": true,
+      "expected": [
+        {
+          "type": "exports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "name": "Primitive"
+          }
+        },
+        {
+          "type": "exports",
+          "resolution": "syntactic",
+          "target": {
+            "kind": "unresolved",
+            "name": "Scalars"
+          }
+        }
+      ],
+      "category": "relation",
+      "relationKind": "file"
+    }
+  ]
+}

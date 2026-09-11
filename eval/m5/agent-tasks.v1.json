@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "kind": "m5-phase2-agent-tasks",
+  "purpose": "Frozen question/answer pairs for the M5 Phase 2 agent comparison between the real DSH default retrieval tools and the code-intelligence context_* tools. Deterministically derived from the frozen gold; contains no tool-specific tuning.",
+  "corpus": {
+    "repository": "https://github.com/colinhacks/zod.git",
+    "tag": "v4.4.3",
+    "commit": "1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+    "scanRoot": "packages/zod/src",
+    "archiveSha256": "48e2438edf0294d148b8a06cb5f1954e99aa17ecbb79bef036253cfd2b37f777",
+    "manifestFileCount": 286,
+    "manifestTotalBytes": 2237613,
+    "manifestSha256": "4c0163813c75174b96e808252b033b1074e82dcc9b0a460edd98e6ce85eefdc6"
+  },
+  "sources": {
+    "gold": "eval/m5/gold.json",
+    "goldSha256": "cb9b7c90ed06cfd6a1960fdd71d77733265d21213253916d4357651c409d5237"
+  },
+  "rules": {
+    "questions": "Every arm receives the byte-identical question text; the task set is frozen before any arm runs.",
+    "answers": "Grading is programmatic against answerSpec: exact string equality for text and path, exact integer equality for lines, order-independent set equality for path/name/target sets (compared after trimming and de-duplication).",
+    "leakage": "No question names a tool, a tool argument, or a retrieval strategy. The gold request fields (name/kind/mode/offsets/lineRange/types) are restated because they define the task, not the method.",
+    "independence": "This file and its generator never call the tested extractor or any tool; they only project eval/m5/gold.json.",
+    "scope": "This is a retrieval QA benchmark over a frozen corpus, not a SWE task benchmark. It measures whether an agent can obtain and report repository facts, not whether it can change code."
+  },
+  "budget": {
+    "maxModelCalls": 8,
+    "maxToolCalls": 16,
+    "maxOutputTokens": 1200,
+    "note": "Identical caps for every arm. An arm that exceeds a cap fails that task."
+  },
+  "tasks": [
+    {
+      "id": "decl-01-variable-same-name-set",
+      "category": "declaration",
+      "question": "Find every file that declares a variable named `allowsEval`. The name occurs in more than one place; report all of them. Reply with exactly one JSON object and nothing else. Use the shape {\"paths\": [\"<repo-relative path>\", ...]} with each declaring file listed exactly once.",
+      "answerSpec": {
+        "kind": "pathSet",
+        "paths": [
+          "v4/classic/tests/jitless-allows-eval.test.ts",
+          "v4/core/schemas.ts",
+          "v4/core/util.ts"
+        ]
+      }
+    },
+    {
+      "id": "decl-02-function-unique",
+      "category": "declaration",
+      "question": "Find the function declaration named `fixedBase64`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/core/regexes.ts",
+        "startLine": 158,
+        "endLine": 160
+      }
+    },
+    {
+      "id": "decl-03-interface-path-prefix",
+      "category": "declaration",
+      "question": "Find the interface declaration named `$ZSF` under the directory `v4/core`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/core/zsf.ts",
+        "startLine": 5,
+        "endLine": 12
+      }
+    },
+    {
+      "id": "decl-04-type-non-exported",
+      "category": "declaration",
+      "question": "Find the type declaration named `$ZSFObjectProperties`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/core/zsf.ts",
+        "startLine": 69,
+        "endLine": 74
+      }
+    },
+    {
+      "id": "decl-05-enum-nested",
+      "category": "declaration",
+      "question": "Find the enum declaration named `NumberEnum` under the directory `v4/classic/tests`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/classic/tests/to-json-schema.test.ts",
+        "startLine": 945,
+        "endLine": 948
+      }
+    },
+    {
+      "id": "decl-06-class-unique",
+      "category": "declaration",
+      "question": "Find the class declaration named `$ZodAsyncError`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/core/core.ts",
+        "startLine": 98,
+        "endLine": 102
+      }
+    },
+    {
+      "id": "decl-07-method-member",
+      "category": "declaration",
+      "question": "Find the method declaration named `indented`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/core/doc.ts",
+        "startLine": 12,
+        "endLine": 16
+      }
+    },
+    {
+      "id": "decl-08-enum-member",
+      "category": "declaration",
+      "question": "Find the enum-member declaration named `Red` under the directory `v4/classic/tests`. Reply with exactly one JSON object and nothing else. Use the shape {\"path\": \"<repo-relative path>\", \"startLine\": <first line, 1-based>, \"endLine\": <last line, 1-based inclusive>} of that declaration.",
+      "answerSpec": {
+        "kind": "declarationLocation",
+        "path": "v4/classic/tests/to-json-schema-methods.test.ts",
+        "startLine": 224,
+        "endLine": 224
+      }
+    },
+    {
+      "id": "src-01-whole-file",
+      "category": "source",
+      "question": "Return the complete source text of the file `v4-mini/index.ts`. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<file contents>\"} with the exact text, no line numbers.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v4-mini/index.ts",
+        "text": "import * as z from \"../v4/mini/external.js\";\nexport * from \"../v4/mini/external.js\";\nexport { z };\n"
+      }
+    },
+    {
+      "id": "src-02-offset-range-declaration",
+      "category": "source",
+      "question": "Return the exact source text that occupies the half-open UTF-16 code-unit range [13, 81) of the file `v4/core/versions.ts`. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<exact text>\"}.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v4/core/versions.ts",
+        "text": "version = {\n  major: 4,\n  minor: 4,\n  patch: 3 as number,\n} as const"
+      }
+    },
+    {
+      "id": "src-03-line-range-padding",
+      "category": "source",
+      "question": "Return the exact source text of lines 5 through 6 (1-based, inclusive; include the line terminator of line 6) of the file `v4/core/config.ts` plus 1 line(s) of padding on each side, clamped to the file bounds. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<exact text>\"}.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v4/core/config.ts",
+        "text": "  /** Custom error map. Overrides `config().localeError`. */\n  customError?: errors.$ZodErrorMap | undefined;\n  /** Localized error map. Lowest priority. */\n  localeError?: errors.$ZodErrorMap | undefined;\n"
+      }
+    },
+    {
+      "id": "src-04-empty-offset-range",
+      "category": "source",
+      "question": "Return the exact source text that occupies the half-open UTF-16 code-unit range [87, 87) of the file `v3/helpers/typeAliases.ts`. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<exact text>\"}.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v3/helpers/typeAliases.ts",
+        "text": ""
+      }
+    },
+    {
+      "id": "src-05-multibyte-line-range",
+      "category": "source",
+      "question": "Return the exact source text of lines 7 through 10 (1-based, inclusive; include the line terminator of line 10) of the file `v4/locales/ja.ts`. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<exact text>\"}.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v4/locales/ja.ts",
+        "text": "    string: { unit: \"文字\", verb: \"である\" },\n    file: { unit: \"バイト\", verb: \"である\" },\n    array: { unit: \"要素\", verb: \"である\" },\n    set: { unit: \"要素\", verb: \"である\" },\n"
+      }
+    },
+    {
+      "id": "src-06-padding-clamped",
+      "category": "source",
+      "question": "Return the exact source text of lines 1 through 1 (1-based, inclusive; include the line terminator of line 1) of the file `v4/core/versions.ts` plus 20 line(s) of padding on each side, clamped to the file bounds. Reply with exactly one JSON object and nothing else. Use the shape {\"text\": \"<exact text>\"}.",
+      "answerSpec": {
+        "kind": "sourceText",
+        "path": "v4/core/versions.ts",
+        "text": "export const version = {\n  major: 4,\n  minor: 4,\n  patch: 3 as number,\n} as const;\n"
+      }
+    },
+    {
+      "id": "rel-03-contains-nesting",
+      "category": "relation",
+      "relationKind": "symbol",
+      "question": "List every symbol that the enum `Colors` declared under `v4/classic/tests` contains (relation type: contains). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<symbol name>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetNameSet",
+        "names": [
+          "Blue",
+          "Green",
+          "Red"
+        ]
+      }
+    },
+    {
+      "id": "rel-01-imports-external",
+      "category": "relation",
+      "relationKind": "file",
+      "question": "List every `imports` relation whose source is the file `v4/classic/tests/enum.test.ts`, and report the target string of each one (for an import/export use the module specifier or the exported name; for a call use the callee name). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<target string>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetStringSet",
+        "targets": [
+          "vitest",
+          "zod/v4"
+        ]
+      }
+    },
+    {
+      "id": "rel-02-exports-named-and-star",
+      "category": "relation",
+      "relationKind": "file",
+      "question": "List every `exports` relation whose source is the file `v4-mini/index.ts`, and report the target string of each one (for an import/export use the module specifier or the exported name; for a call use the callee name). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<target string>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetStringSet",
+        "targets": [
+          "../v4/mini/external.js",
+          "z"
+        ]
+      }
+    },
+    {
+      "id": "rel-04-calls-heuristic",
+      "category": "relation",
+      "relationKind": "file",
+      "question": "List every `calls` relation whose source is the file `v4/classic/external.ts`, and report the target string of each one (for an import/export use the module specifier or the exported name; for a call use the callee name). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<target string>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetStringSet",
+        "targets": [
+          "config",
+          "en"
+        ]
+      }
+    },
+    {
+      "id": "rel-05-zero-edge",
+      "category": "relation",
+      "relationKind": "file",
+      "question": "List every `imports` relation whose source is the file `v4/core/versions.ts`, and report the target string of each one (for an import/export use the module specifier or the exported name; for a call use the callee name). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<target string>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetStringSet",
+        "targets": []
+      }
+    },
+    {
+      "id": "rel-06-type-only-exports",
+      "category": "relation",
+      "relationKind": "file",
+      "question": "List every `exports` relation whose source is the file `v3/helpers/typeAliases.ts`, and report the target string of each one (for an import/export use the module specifier or the exported name; for a call use the callee name). Reply with exactly one JSON object and nothing else. Use the shape {\"targets\": [\"<target string>\", ...]}.",
+      "answerSpec": {
+        "kind": "targetStringSet",
+        "targets": [
+          "Primitive",
+          "Scalars"
+        ]
+      }
+    }
+  ]
+}

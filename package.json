@@ -27,6 +27,7 @@
   },
   "files": [
     "lib/index.js",
+    "lib/index.js.map",
     "lib/index.d.ts",
     "lib/index.d.ts.map",
     "lib/client.js",
@@ -58,9 +59,9 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-subprocess": "0.1.2-rc.1",
+    "@deepseek-ai/schemastery": "3.18.2",
     "@han_05/dsh-context": "^0.2.0",
     "@han_05/dsh-context-cache": "^0.2.0",
-    "@deepseek-ai/schemastery": "3.18.2",
     "picomatch": "4.0.7",
     "typescript": "5.9.3"
   },

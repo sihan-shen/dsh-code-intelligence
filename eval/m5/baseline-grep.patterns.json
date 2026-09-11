@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Phase 1 preregistered grep probes for the DSH default retrieval baseline. Each probe is derived ONLY from the task input that a user/agent legitimately holds (symbol name, declared path or pathPrefix, relation endpoint path/name) and MUST NOT be adjusted after seeing results. Scoring uses eval/m5/gold.json; this file carries no answer.",
+  "corpusCommit": "1fb56a5c18c27102dbc92260a4007c7732a0ccca",
+  "grepTool": {
+    "package": "@deepseek-ai/dsh-tool-fs-search",
+    "version": "0.1.3-alpha.2",
+    "resolvedFrom": "DSH profile install (.dsh/profiles/node_modules/@deepseek-ai/dsh-tool-fs-search -> upstream/deepseek-harness/apps/cli/node_modules/@deepseek-ai/dsh-tool-fs-search)",
+    "engine": "@vscode/ripgrep",
+    "engineVersion": "1.18.0"
+  },
+  "rules": {
+    "declaration": "pattern = request.name with ripgrep metacharacters escaped; path = request.pathPrefix when the task declares one, otherwise the whole corpus (unscoped).",
+    "source": "grep cannot return a range; the file is named in the task, so the probe is a file-scoped topic keyword and the baseline must additionally read the whole file. File bytes are therefore part of the source-arm cost.",
+    "relation": "probe pattern is the statement form implied by request.types (imports/exports/calls) or the request-endpoint name (contains); the probe cannot know the expected target names.",
+    "note": "No probe uses a string taken from the gold span, snippet, or expected target list."
+  },
+  "probes": [
+    {
+      "id": "decl-01-variable-same-name-set",
+      "category": "declaration",
+      "basis": "request.name (exact); no pathPrefix declared",
+      "grep": { "pattern": "allowsEval" }
+    },
+    {
+      "id": "decl-02-function-unique",
+      "category": "declaration",
+      "basis": "request.name (exact); no pathPrefix declared",
+      "grep": { "pattern": "fixedBase64" }
+    },
+    {
+      "id": "decl-03-interface-path-prefix",
+      "category": "declaration",
+      "basis": "request.name with `$` escaped for ripgrep; path = request.pathPrefix",
+      "grep": { "pattern": "\\$ZSF", "path": "v4/core" },
+      "note": "matches the $ZSF declaration and the $ZSFObjectProperties prefix family"
+    },
+    {
+      "id": "decl-04-type-non-exported",
+      "category": "declaration",
+      "basis": "request.name with `$` escaped; no pathPrefix declared",
+      "grep": { "pattern": "\\$ZSFObjectProperties" }
+    },
+    {
+      "id": "decl-05-enum-nested",
+      "category": "declaration",
+      "basis": "request.name (exact); path = request.pathPrefix",
+      "grep": { "pattern": "NumberEnum", "path": "v4/classic/tests" }
+    },
+    {
+      "id": "decl-06-class-unique",
+      "category": "declaration",
+      "basis": "request.name with `$` escaped; no pathPrefix declared",
+      "grep": { "pattern": "\\$ZodAsyncError" }
+    },
+    {
+      "id": "decl-07-method-member",
+      "category": "declaration",
+      "basis": "request.name (exact); no pathPrefix declared",
+      "grep": { "pattern": "indented" }
+    },
+    {
+      "id": "decl-08-enum-member",
+      "category": "declaration",
+      "basis": "request.name (exact); path = request.pathPrefix",
+      "grep": { "pattern": "Red", "path": "v4/classic/tests" },
+      "note": "grep is line-oriented and cannot express kind=enum-member; this is the main declaration handicap"
+    },
+    {
+      "id": "src-01-whole-file",
+      "category": "source",
+      "basis": "task names the file; probe keyword is the file's dominant construct",
+      "grep": { "pattern": "export", "path": "v4-mini/index.ts" }
+    },
+    {
+      "id": "src-02-offset-range-declaration",
+      "category": "source",
+      "basis": "task names the file; probe keyword is the declared value name",
+      "grep": { "pattern": "version", "path": "v4/core/versions.ts" }
+    },
+    {
+      "id": "src-03-line-range-padding",
+      "category": "source",
+      "basis": "task names the file; probe keyword is the file's dominant construct",
+      "grep": { "pattern": "export", "path": "v4/core/config.ts" }
+    },
+    {
+      "id": "src-04-empty-offset-range",
+      "category": "source",
+      "basis": "task names the file; probe keyword is the file's dominant construct",
+      "grep": { "pattern": "type", "path": "v3/helpers/typeAliases.ts" }
+    },
+    {
+      "id": "src-05-multibyte-line-range",
+      "category": "source",
+      "basis": "task names the file; probe keyword is a field name visible on the target lines",
+      "grep": { "pattern": "string", "path": "v4/locales/ja.ts" }
+    },
+    {
+      "id": "src-06-padding-clamped",
+      "category": "source",
+      "basis": "task names the file; probe keyword is the declared value name",
+      "grep": { "pattern": "version", "path": "v4/core/versions.ts" }
+    },
+    {
+      "id": "rel-03-contains-nesting",
+      "category": "relation",
+      "basis": "request endpoint name (request.from.symbolName); path = request.from.symbolPrefix",
+      "grep": { "pattern": "Colors", "path": "v4/classic/tests" },
+      "note": "grep can surface the enum statement but not its members; members require a follow-up read"
+    },
+    {
+      "id": "rel-01-imports-external",
+      "category": "relation",
+      "basis": "statement form for types=[imports]; path = request.from.path (relation source is task input)",
+      "grep": { "pattern": "^\\s*import\\b", "path": "v4/classic/tests/enum.test.ts" }
+    },
+    {
+      "id": "rel-02-exports-named-and-star",
+      "category": "relation",
+      "basis": "statement form for types=[exports]; path = request.from.path",
+      "grep": { "pattern": "^\\s*export\\b", "path": "v4-mini/index.ts" }
+    },
+    {
+      "id": "rel-04-calls-heuristic",
+      "category": "relation",
+      "basis": "generic call-site regex; the calls relation has no name in the request",
+      "grep": { "pattern": "[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(", "path": "v4/classic/external.ts" }
+    },
+    {
+      "id": "rel-05-zero-edge",
+      "category": "relation",
+      "basis": "statement form for types=[imports]; path = request.from.path",
+      "grep": { "pattern": "^\\s*import\\b", "path": "v4/core/versions.ts" }
+    },
+    {
+      "id": "rel-06-type-only-exports",
+      "category": "relation",
+      "basis": "statement form for types=[exports]; path = request.from.path",
+      "grep": { "pattern": "^\\s*export\\b", "path": "v3/helpers/typeAliases.ts" }
+    }
+  ]
+}
