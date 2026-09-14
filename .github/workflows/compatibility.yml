@@ -1,0 +1,45 @@
+name: Compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tarball-consumer:
+    name: Node ${{ matrix.node }} / DSH ${{ matrix.dsh }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '22.19.0'
+            dsh: '0.1.2-rc.1'
+            host_versions: '{"@deepseek-ai/cordis":"4.0.2","@deepseek-ai/dsh-llm":"0.1.2-rc.1","@deepseek-ai/dsh-session":"0.1.2-rc.1","@deepseek-ai/dsh-tools":"0.1.2-rc.1","@deepseek-ai/dsh-workspace":"0.1.2-rc.1","@deepseek-ai/schemastery":"3.18.2","@deepseek-ai/dsh-client-locale":"0.1.2-rc.1","@deepseek-ai/dsh-client-ui-settings":"0.1.2-rc.1","@deepseek-ai/dsh-client-ui-slots":"0.1.2-rc.1","@deepseek-ai/dsh-settings":"0.1.2-rc.1","@deepseek-ai/dsh-subprocess":"0.1.2-rc.1","react":"18.3.1"}'
+          - node: '24.6.0'
+            dsh: '0.1.2-rc.1'
+            host_versions: '{"@deepseek-ai/cordis":"4.0.2","@deepseek-ai/dsh-llm":"0.1.2-rc.1","@deepseek-ai/dsh-session":"0.1.2-rc.1","@deepseek-ai/dsh-tools":"0.1.2-rc.1","@deepseek-ai/dsh-workspace":"0.1.2-rc.1","@deepseek-ai/schemastery":"3.18.2","@deepseek-ai/dsh-client-locale":"0.1.2-rc.1","@deepseek-ai/dsh-client-ui-settings":"0.1.2-rc.1","@deepseek-ai/dsh-client-ui-slots":"0.1.2-rc.1","@deepseek-ai/dsh-settings":"0.1.2-rc.1","@deepseek-ai/dsh-subprocess":"0.1.2-rc.1","react":"18.3.1"}'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Create one tarball
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Verify external consumer and five tools
+        env:
+          DSH_HOST_VERSION: ${{ matrix.dsh }}
+          DSH_HOST_VERSIONS_JSON: ${{ matrix.host_versions }}
+        run: |
+          set -euo pipefail
+          test "$DSH_HOST_VERSION" = '0.1.2-rc.1'
+          archive="$(find "$RUNNER_TEMP" -maxdepth 1 -name '*.tgz' -print -quit)"
+          test -n "$archive"
+          NODE_PATH='' node scripts/ci/verify-tarball.mjs "$archive"
