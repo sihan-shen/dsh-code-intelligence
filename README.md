@@ -3,6 +3,7 @@
 > Bounded repository context tools for DeepSeek Harness.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/sihan-shen/dsh-code-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/sihan-shen/dsh-code-intelligence/actions/workflows/ci.yml)
 
 `dsh-code-intelligence` gives coding agents a verified, queryable view of a TypeScript or JavaScript repository. It exposes repository facts and targeted source reads without replacing the host agent loop or executing repository code.
 
@@ -31,9 +32,15 @@ The default plugin requires a registered workspace and live DSH Session. An opti
 
 Requirements: Node.js `^22.19.0 || >=24` and a DeepSeek Harness installation.
 
-Install the plugin directly from GitHub:
+For a published package, install from npm:
 
+```bash
+pnpm add @han_05/dsh-code-intelligence
 ```
+
+To install directly from GitHub with the Harness plugin loader:
+
+```bash
 dsh plugin --profile web add github:sihan-shen/dsh-code-intelligence
 ```
 
@@ -56,11 +63,17 @@ pnpm test:package-entry
 
 The package also exports programmatic P0 and V1 APIs, including `createContextCompiler`, `createContextTools`, `createCodeIntelligenceTools`, and `mountCodeIntelligence`. See the design document for lifecycle and API details.
 
+The release workflow accepts only tags matching the package version, including prereleases (for example, `v0.3.0-rc.1`). CI runs on `master`, `release`, and pull requests. The manually triggered compatibility workflow validates a packed tarball in an external consumer using the pinned Cordis/session/tool-runtime host-equivalent fixture; it does not claim to run `dsh plugin add` unless a real pinned DSH distribution is supplied.
+
 ## Documentation
 
 - [`doc/code-intelligence-design.md`](doc/code-intelligence-design.md): architecture, contracts, lifecycle, and query semantics
 - [`doc/m3-progress.md`](doc/m3-progress.md), [`doc/m4-progress.md`](doc/m4-progress.md): implementation and validation notes
 - [`doc/m5-progress.md`](doc/m5-progress.md): current acceptance decisions and release evidence
+
+## Support and compatibility
+
+The package declares its supported Node.js range in `package.json` and currently targets the pinned DeepSeek Harness dependency family used by this repository: required host peers are pinned to `@deepseek-ai/cordis` `4.0.2`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-session`, `@deepseek-ai/dsh-tools`, and `@deepseek-ai/dsh-workspace` `0.1.2-rc.1`, plus `@deepseek-ai/schemastery` `3.18.2`. Client integrations, settings, subprocess, and React are optional peers with compatible ranges. All are retained as development dependencies for reproducible CI; the compatibility workflow explicitly installs and verifies the complete host test profile.
 
 ## License
 
