@@ -3,3 +3,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@han_05/dsh-context-cache@0.3.0-rc.1'
+  - '@han_05/dsh-context@0.3.0-rc.1'

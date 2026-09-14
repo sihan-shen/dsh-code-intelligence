@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@han_05/dsh-context':
-        specifier: ^0.2.0
-        version: 0.2.1
+        specifier: 0.3.0-rc.1
+        version: 0.3.0-rc.1
       '@han_05/dsh-context-cache':
-        specifier: ^0.2.0
-        version: 0.2.0(@han_05/dsh-context@0.2.1)
+        specifier: 0.3.0-rc.1
+        version: 0.3.0-rc.1(@han_05/dsh-context@0.3.0-rc.1)
       picomatch:
         specifier: 4.0.7
         version: 4.0.7
@@ -445,17 +445,17 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@han_05/dsh-context-cache@0.2.0':
-    resolution: {integrity: sha512-hk+ND8B3o9q88nAdJ46WyV++aPbXwRyBM04iVEWkWD8R7Myk0BH5EVvowrFZee62n/QhudtAdTK1pyL5xkCqLg==}
+  '@han_05/dsh-context-cache@0.3.0-rc.1':
+    resolution: {integrity: sha512-gnfBDZ1ifuoHXXqwTcgMLoaPn+jTlc96QykdC5SXxVDdlT7b/x+LoizicZeOXVQpjIzzFypE76nExkmye5Qprg==}
     engines: {node: ^22.19.0 || >=24}
     peerDependencies:
-      '@han_05/dsh-context': ^0.2.0
+      '@han_05/dsh-context': 0.3.0-rc.1
     peerDependenciesMeta:
       '@han_05/dsh-context':
         optional: true
 
-  '@han_05/dsh-context@0.2.1':
-    resolution: {integrity: sha512-y94qUNmU14r7/8wipDQS5GYjgBT9JFWbprgGoZWxG3PgewpWp22870KHa+xrN6PQ8D4jRzl31n0RE6/Rd/St6A==}
+  '@han_05/dsh-context@0.3.0-rc.1':
+    resolution: {integrity: sha512-+YRmc+MVr3zjQRNGzXkGduRq4A5JbpVTGtMzTGIBdfq0Y6xtDjTRXqqQWo4uHezbhqHN46f613m7j1+Ps5X7QQ==}
     engines: {node: ^22.19.0 || >=24}
 
   '@jridgewell/gen-mapping@0.3.13':
@@ -1490,11 +1490,11 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@han_05/dsh-context-cache@0.2.0(@han_05/dsh-context@0.2.1)':
+  '@han_05/dsh-context-cache@0.3.0-rc.1(@han_05/dsh-context@0.3.0-rc.1)':
     optionalDependencies:
-      '@han_05/dsh-context': 0.2.1
+      '@han_05/dsh-context': 0.3.0-rc.1
 
-  '@han_05/dsh-context@0.2.1': {}
+  '@han_05/dsh-context@0.3.0-rc.1': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

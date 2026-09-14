@@ -61,8 +61,8 @@
     }
   },
   "dependencies": {
-    "@han_05/dsh-context": "^0.2.0",
-    "@han_05/dsh-context-cache": "^0.2.0",
+    "@han_05/dsh-context": "0.3.0-rc.1",
+    "@han_05/dsh-context-cache": "0.3.0-rc.1",
     "picomatch": "4.0.7",
     "typescript": "5.9.3"
   },
