@@ -272,7 +272,7 @@ describe('M2 Q5 default plugin through the real Native registry', () => {
 
   it('exports its unchanged bundle manifest and rejects unsupported non-Cordis default mounting', async () => {
     const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-    expect(manifest.version).toBe('0.2.1')
+    expect(manifest.version).toBe('0.3.0-rc.1')
     expect(manifest.dsh.bundle.patch).toBe('./cordis.patch.yml')
     expect(await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')).toContain("name: '@han_05/dsh-code-intelligence'")
     await expect(apply({} as never, { deploymentRoot: '.', revision: 'x' })).rejects.toThrow(/Cordis/)
