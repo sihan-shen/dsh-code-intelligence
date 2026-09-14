@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -28,6 +29,9 @@ import {
   verifyCorpusTree,
 } from '../eval/m5/harness.mjs'
 
+const hasHistoricalDshProfile = existsSync(join(DSH_PROFILE_MODULES, 'cordis/package.json'))
+const profileIt = hasHistoricalDshProfile ? it : it.skip
+
 const temporaryRoots: string[] = []
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
@@ -52,7 +56,7 @@ const manifest = {
 }
 
 describe('M5 comparison harness invariants', () => {
-  it('resolves one peer-identical DSH evaluation host and records every core module', async () => {
+  profileIt('resolves one peer-identical DSH evaluation host and records every core module', async () => {
     const host = await resolveEvaluationHost()
     expect(host.generation).toBe('0.1.3-alpha.2')
     expect(Object.keys(host.provenance.modules).sort()).toEqual([
@@ -84,7 +88,7 @@ describe('M5 comparison harness invariants', () => {
       .toBe(new URL(`file://${await realpath(join(dirname(hostSchemastery), 'lib/index.mjs'))}`).href)
   })
 
-  it('exposes a usable call-id constructor on the 0.1.3 host (ToolCallId was renamed to CallId)', async () => {
+  profileIt('exposes a usable call-id constructor on the 0.1.3 host (ToolCallId was renamed to CallId)', async () => {
     const host = await resolveEvaluationHost()
     expect(typeof host.apis.ToolCallId).toBe('function')
     expect(host.apis.ToolCallId('abc')).toBe('abc')
