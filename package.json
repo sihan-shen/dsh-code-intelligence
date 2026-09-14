@@ -2,6 +2,7 @@
   "name": "@han_05/dsh-code-intelligence",
   "version": "0.2.1",
   "description": "Repository snapshots, symbols, and context tools for DeepSeek Harness",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sihan-shen/dsh-code-intelligence.git"
@@ -32,7 +33,8 @@
     "lib/index.d.ts.map",
     "lib/client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"

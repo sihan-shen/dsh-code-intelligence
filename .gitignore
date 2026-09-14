@@ -9,4 +9,12 @@ pnpm-debug.log*
 .vite-temp/
 coverage/
 .nyc_output/
+
+# Generated evaluation reports
+/eval/m6/lsp-protocol-report.json
+/eval/m6/report.json
+/eval/m6/task6-report.json
+/eval/m6/task6-summary.json
+/eval/m7/artifacts/
+
 .DS_Store

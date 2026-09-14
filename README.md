@@ -2,6 +2,8 @@
 
 > Bounded repository context tools for DeepSeek Harness.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `dsh-code-intelligence` gives coding agents a verified, queryable view of a TypeScript or JavaScript repository. It exposes repository facts and targeted source reads without replacing the host agent loop or executing repository code.
 
 ## Default tools
@@ -26,6 +28,8 @@ The default plugin requires a registered workspace and live DSH Session. An opti
 - Snapshot data is a verified receipt view, not a historical source archive or a DLP scanner.
 
 ## Install
+
+Requirements: Node.js `^22.19.0 || >=24` and a DeepSeek Harness installation.
 
 Install the plugin directly from GitHub:
 
@@ -57,3 +61,7 @@ The package also exports programmatic P0 and V1 APIs, including `createContextCo
 - [`doc/code-intelligence-design.md`](doc/code-intelligence-design.md): architecture, contracts, lifecycle, and query semantics
 - [`doc/m3-progress.md`](doc/m3-progress.md), [`doc/m4-progress.md`](doc/m4-progress.md): implementation and validation notes
 - [`doc/m5-progress.md`](doc/m5-progress.md): current acceptance decisions and release evidence
+
+## License
+
+Distributed under the [MIT License](LICENSE).
