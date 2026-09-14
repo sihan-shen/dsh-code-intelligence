@@ -81,7 +81,7 @@ jobs:
           name: npm-package
           path: ${{ runner.temp }}/package
       - name: Publish with npm trusted publishing
-        run: npm publish "$(find "$RUNNER_TEMP/package" -name '*.tgz' -print -quit)" --provenance --access public
+        run: npm publish "$(find "$RUNNER_TEMP/package" -name '*.tgz' -print -quit)" --provenance --access public --tag next
 
   github-release:
     name: Create GitHub release
@@ -94,7 +94,7 @@ jobs:
         with:
           name: npm-package
           path: release-assets
-      - name: Create release and upload archive
+      - name: Create prerelease and upload archive
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/*.tgz --generate-notes --title "$GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" release-assets/*.tgz --generate-notes --title "$GITHUB_REF_NAME" --prerelease
